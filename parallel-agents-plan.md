@@ -6,9 +6,16 @@ Ajouter à Pi une capacité de lancement de plusieurs sous-agents en parallèle 
 
 Chaque sous-agent doit :
 
-- créer son propre `git worktree` ;
-- travailler dans `../pi/<branch-name>` où `..` est le dossier parent de la racine du projet courant ;
+- être créé par un script shell d’amorçage appelé par l’agent principal ;
+- créer par défaut son propre `git worktree` ;
+- pouvoir aussi être lancé sans worktree, directement dans le repo courant ;
+- travailler soit dans `../pi/<worktree-name>` où `..` est le dossier parent de la racine du projet courant, soit dans `repoRoot` en mode sans worktree ;
+- avoir un nom de worktree/branche proposé par un agent Pi à partir du contexte fourni, puis validé/sanitisé par le script, uniquement lorsqu’un worktree est créé ;
 - utiliser le même harness Pi que l’agent principal ;
+- utiliser le modèle et le niveau de thinking demandés par l’agent principal, avec défaut `gpt-5.5` / `high` ;
+- exposer un `sessionId`/`sessionFile` Pi au parent pour pouvoir être relancé ;
+- pouvoir être arrêté à tout moment par l’agent principal sans supprimer son worktree éventuel ni sa session ;
+- pouvoir être repris par l’agent principal depuis sa session persistée ;
 - avoir un espace dédié dans la TUI ;
 - pouvoir poser des questions à l’utilisateur ;
 - pouvoir poser des questions à l’agent principal ;
@@ -18,62 +25,262 @@ Chaque sous-agent doit :
 
 Construire une extension Pi appelée par exemple `parallel-agents.ts`.
 
-Cette extension orchestre des sous-agents Pi lancés en mode RPC :
+Cette extension orchestre des sous-agents Pi lancés via un script shell d’amorçage, par exemple `scripts/start-parallel-agent.sh`.
+
+Le script est l’unique point d’entrée de création/reprise d’un agent enfant. Par défaut il crée un nouveau worktree, s’y positionne, lance un vrai processus Pi en mode RPC, puis retourne au parent les métadonnées nécessaires au suivi et à la reprise. Si le parent demande explicitement le mode sans worktree, le script ne crée ni branche ni worktree et lance l’agent directement depuis le repo courant.
 
 ```bash
-pi --mode rpc --provider <same-provider> --model <same-model>
+scripts/start-parallel-agent.sh --context <context.json> --prompt <prompt.md>
+```
+
+Le processus enfant lancé par le script reste un Pi RPC standard :
+
+```bash
+cd <agent-cwd>
+pi --mode rpc --provider <provider> --model <model>
+```
+
+`agent-cwd` vaut soit le chemin du worktree créé, soit `repoRoot` en mode sans worktree.
+
+Le niveau de thinking est appliqué par le script au démarrage, soit via le format de modèle supporté par Pi, soit via une commande RPC `set_thinking_level` après ouverture de la session.
+
+En reprise, le même script relance Pi dans le même workspace avec la session persistée :
+
+```bash
+cd <agent-cwd>
+pi --mode rpc --provider <provider> --model <model> --session <session-file-or-id>
 ```
 
 Chaque sous-agent est un vrai processus Pi indépendant, avec :
 
-- son propre `cwd`, pointant vers son worktree ;
-- le même modèle que l’agent principal ;
-- le même niveau de thinking ;
+- son propre `cwd`, pointant par défaut vers son worktree, ou vers le repo courant en mode sans worktree ;
+- une session Pi persistante identifiée par `sessionId` et `sessionFile` ;
+- un modèle choisi par l’agent principal ;
+- un niveau de thinking choisi par l’agent principal ;
+- par défaut `model = "gpt-5.5"` et `thinking = "high"`, sauf si l’utilisateur ou l’agent principal spécifie autre chose ;
 - les mêmes credentials Pi ;
 - les mêmes tools de base ;
 - les mêmes skills/prompts/extensions utiles.
 
 Le choix du mode RPC permet :
 
-- une isolation propre ;
+- une isolation de processus propre ;
 - le vrai runtime Pi ;
 - la réception des events de streaming ;
 - l’envoi de messages `prompt`, `steer`, `follow_up`, `abort` ;
 - le routage du protocole `extension_ui_request` vers l’interface TUI principale.
 
-## Création des worktrees
+L’isolation des fichiers n’est garantie que pour les agents lancés avec worktree. En mode sans worktree, l’agent partage le même dossier de travail que l’agent principal et peut donc modifier les mêmes fichiers.
 
-Pour chaque sous-agent :
+## Script d’amorçage d’un agent enfant
 
-1. Déterminer la racine git :
+L’agent principal ne crée pas directement un enfant en TypeScript. Il appelle un script shell qui encapsule la stratégie de création/reprise.
+
+Contrat minimal du script :
+
+```bash
+scripts/start-parallel-agent.sh \
+  --context <context.json> \
+  --prompt <prompt.md> \
+  --provider <provider> \
+  --model <model> \
+  --thinking <level> \
+  [--workspace-mode worktree|current] \
+  [--resume-session <session-file-or-id>] \
+  [--cwd <existing-workspace>] \
+  [--worktree-path <existing-worktree>] \
+  [--tasks-db <absolute-path-to-shared-tasks.sqlite>]
+```
+
+Le script propage aussi aux processus enfants les variables nécessaires au partage de queues :
+
+```bash
+PI_TASKS_DB_PATH=<repoRoot>/.pi/parallel-agents/tasks.sqlite
+PI_TASKS_AGENT_ID=parallel-child:<agent-id>
+```
+
+L’agent principal utilise une identité stable distincte, par exemple `PI_TASKS_AGENT_ID=parallel-main:<main-session-id>`, pour les claims de livraison.
+
+Comportement par défaut, sans `--resume-session` :
+
+1. reçoit le contexte du parent : racine repo, prompt utilisateur, tâche du sous-agent, contraintes, noms déjà utilisés, worktrees existants, modèle et thinking demandés, mode de workspace demandé ;
+2. résout `workspaceMode`, avec `worktree` par défaut ;
+3. si `workspaceMode = "worktree"` :
+   1. appelle un agent Pi dédié au naming avec ce contexte ;
+   2. récupère une proposition structurée, par exemple :
+
+      ```json
+      {
+        "displayName": "api",
+        "worktreeName": "agent-api-refactor",
+        "branchName": "agent-api-refactor"
+      }
+      ```
+
+   3. sanitise et déduplique `worktreeName`/`branchName` côté script ;
+   4. crée le worktree ;
+   5. définit `agentCwd = worktreePath` ;
+
+4. si `workspaceMode = "current"` :
+   1. ne crée ni branche ni worktree ;
+   2. définit `agentCwd = repoRoot` ;
+   3. conserve `branchName = null` et `worktreePath = null` ;
+5. exécute `cd <agent-cwd>` ;
+6. lance l’agent Pi dédié en mode RPC avec `--provider <provider>` et `--model <model>` ;
+7. applique le niveau de thinking demandé ;
+8. envoie le prompt initial ;
+9. interroge `get_state` pour obtenir `sessionId` et `sessionFile` ;
+10. retourne au parent un JSON de suivi :
+
+```json
+{
+  "agentId": "api",
+  "displayName": "api",
+  "pid": 12345,
+  "workspaceMode": "worktree",
+  "cwd": "../pi/agent-api-refactor",
+  "provider": "openai",
+  "model": "gpt-5.5",
+  "thinking": "high",
+  "branchName": "agent-api-refactor",
+  "worktreePath": "../pi/agent-api-refactor",
+  "sessionId": "abc123",
+  "sessionFile": "/Users/.../.pi/agent/sessions/...jsonl",
+  "status": "running"
+}
+```
+
+En mode sans worktree, le JSON contient notamment :
+
+```json
+{
+  "workspaceMode": "current",
+  "cwd": "/path/to/repo",
+  "branchName": null,
+  "worktreePath": null
+}
+```
+
+Comportement en reprise, avec `--resume-session` :
+
+1. réutilise `workspaceMode`, `cwd`, `worktreePath`, `branchName`, `sessionId`, `sessionFile`, `provider`, `model` et `thinking` stockés par le parent ;
+2. vérifie que le workspace existe encore (`worktreePath` en mode worktree, `repoRoot`/`cwd` en mode current) ;
+3. exécute `cd <agent-cwd>` ;
+4. relance `pi --mode rpc --provider <provider> --model <model> --session <session-file-or-id>` ;
+5. réapplique le niveau de thinking si nécessaire ;
+6. retourne un nouveau `pid` en conservant le même `agentId` logique.
+
+## Configuration modèle et thinking des sous-agents
+
+L’agent principal doit pouvoir choisir le modèle et le niveau de thinking utilisés par les sous-agents.
+
+Valeurs par défaut initiales :
+
+```text
+model: gpt-5.5
+thinking: high
+```
+
+Le `provider` est résolu à partir du modèle quand c’est possible, ou depuis la configuration Pi active.
+
+Si l’utilisateur demande explicitement un autre modèle ou un autre niveau de thinking dans le prompt principal, l’agent principal doit les transmettre au lancement des sous-agents.
+
+Ordre de priorité pour résoudre `model` et `thinking` :
+
+1. valeur explicitement définie pour un agent dans `launch_parallel_agents.agents[]` ;
+2. valeur définie pour tout le lancement via `launch_parallel_agents.defaultModel` / `defaultThinking` ;
+3. valeur par défaut courante configurée par commande ;
+4. fallback `gpt-5.5` / `high`.
+
+L’extension expose une commande pour consulter ou modifier les valeurs par défaut des prochains sous-agents :
+
+```text
+/agents-defaults
+/agents-defaults --model gpt-5.5 --thinking high
+/agents-defaults --model <model>
+/agents-defaults --thinking <off|minimal|low|medium|high|xhigh>
+```
+
+Sans argument, la commande affiche la configuration courante. Avec arguments, elle met à jour l’état persistant de l’extension. Le changement affecte les futurs agents et les reprises explicitement demandées avec override, mais ne modifie pas automatiquement les agents déjà lancés.
+
+Chaque agent enfant garde dans ses métadonnées le modèle et le thinking utilisés à sa création :
+
+```json
+{
+  "agentId": "api",
+  "model": "gpt-5.5",
+  "thinking": "high"
+}
+```
+
+Lors d’une reprise, le parent réutilise par défaut `model` et `thinking` persistés pour cet agent afin de préserver la continuité de session. Le parent peut toutefois demander une reprise avec override explicite si nécessaire.
+
+## Mode workspace et création des worktrees
+
+Chaque sous-agent a un `workspaceMode` :
+
+- `worktree` : mode par défaut, crée un worktree dédié dans `../pi/<worktree-name>` ;
+- `current` : mode sans worktree, lance l’agent directement dans le repo courant (`repoRoot`).
+
+Le mode `current` est opt-in car il partage les fichiers avec l’agent principal et les autres agents lancés dans le même repo. Il est utile pour des tâches de lecture, d’analyse, de triage, ou quand l’utilisateur veut explicitement travailler dans le checkout courant.
+
+Pour chaque nouveau sous-agent en mode `worktree`, le script d’amorçage :
+
+1. Détermine la racine git :
 
    ```bash
    git rev-parse --show-toplevel
    ```
 
-2. Calculer le dossier cible :
+2. Prépare le contexte envoyé à l’agent Pi de naming :
+
+   ```json
+   {
+     "repoRoot": "/path/to/repo",
+     "repoName": "repo",
+     "parentPrompt": "...",
+     "agentPrompt": "...",
+     "suggestedName": "api",
+     "existingWorktrees": ["agent-api", "agent-tests"]
+   }
+   ```
+
+3. Demande au naming agent de proposer `worktreeName` et `branchName`.
+
+4. Calcule le dossier cible :
 
    ```text
    repoRoot = racine git du projet courant
    parent = dirname(repoRoot)
    worktreeBase = path.join(parent, "pi")
-   worktreePath = path.join(worktreeBase, branchName)
+   worktreePath = path.join(worktreeBase, worktreeName)
    ```
 
-3. Créer le worktree :
+5. Crée le worktree par défaut :
 
    ```bash
-   git worktree add -b <branch-name> ../pi/<branch-name> HEAD
+   git worktree add -b <branch-name> ../pi/<worktree-name> HEAD
    ```
 
-4. Gérer les collisions de noms :
+6. Gère les collisions de noms, même si le naming agent a proposé un nom déjà pris :
 
    ```text
    feature-auth   -> ../pi/feature-auth
    feature-auth-2 -> si feature-auth existe déjà
    ```
 
-Les noms de branches doivent être sanitizés.
+Les noms de worktrees et de branches doivent être sanitizés par le script, même s’ils ont été produits par un agent Pi.
+
+Pour chaque nouveau sous-agent en mode `current`, le script :
+
+1. détermine `repoRoot` ;
+2. ne lance pas le naming agent pour produire un `worktreeName` ;
+3. ne crée pas de branche ;
+4. ne crée pas de worktree ;
+5. définit `cwd = repoRoot` ;
+6. lance Pi RPC directement depuis ce dossier.
+
+En mode `current`, l’extension doit afficher clairement que l’agent n’est pas isolé au niveau fichiers.
 
 ## Déclenchement depuis le prompt
 
@@ -81,19 +288,27 @@ L’extension expose un tool au main agent :
 
 ```ts
 launch_parallel_agents({
+  defaultModel: "gpt-5.5",
+  defaultThinking: "high",
   agents: [
     {
       name: "api",
-      branchName: "agent-api-refactor",
-      prompt: "Explore/refactor the API layer..."
+      workspaceMode: "worktree",
+      prompt: "Explore/refactor the API layer...",
+    },
+    {
+      name: "triage",
+      workspaceMode: "current",
+      prompt: "Inspect the current repo without creating a worktree...",
     },
     {
       name: "tests",
-      branchName: "agent-tests",
-      prompt: "Add regression tests..."
-    }
-  ]
-})
+      model: "gpt-5.5",
+      thinking: "high",
+      prompt: "Add regression tests...",
+    },
+  ],
+});
 ```
 
 Exemple d’usage utilisateur :
@@ -104,11 +319,20 @@ Lance 3 agents en parallèle : un pour les tests, un pour l’UI, un pour la doc
 
 Le main agent appelle le tool, puis l’extension :
 
-1. crée les branches ;
-2. crée les worktrees ;
-3. démarre les processus Pi RPC ;
-4. envoie le prompt initial à chaque sous-agent ;
-5. retourne les ids des sous-agents au main agent.
+1. résout `workspaceMode`, `model` et `thinking` pour chaque sous-agent ;
+2. prépare un contexte complet pour chaque sous-agent ;
+3. appelle `scripts/start-parallel-agent.sh` pour chaque agent avec `--workspace-mode`, `--provider`, `--model` et `--thinking` ;
+4. laisse le script choisir le nom via un naming agent Pi et créer le worktree uniquement en mode `worktree` ;
+5. démarre Pi RPC depuis le worktree ou directement depuis `repoRoot` en mode `current` ;
+6. récupère le JSON retourné par le script ;
+7. persiste `agentId`, `pid`, `workspaceMode`, `cwd`, `provider`, `model`, `thinking`, `worktreePath`, `branchName`, `sessionId`, `sessionFile` et `status` ;
+8. retourne au main agent les ids logiques des sous-agents et leurs ids de session Pi.
+
+`branchName` ou `worktreeName` peuvent rester optionnels dans l’API. S’ils sont fournis en mode `worktree`, ils servent d’indication au naming agent et au script, mais le script garde la responsabilité finale de sanitation/déduplication. En mode `current`, ils sont ignorés.
+
+`model` et `thinking` sont aussi optionnels dans l’API. S’ils ne sont pas fournis, l’extension utilise la configuration par défaut courante des sous-agents.
+
+`workspaceMode` est optionnel et vaut `worktree` par défaut. Pour lancer un agent sans worktree, le main agent passe `workspaceMode: "current"`.
 
 ## Interface TUI
 
@@ -118,15 +342,17 @@ Afficher un widget au-dessus de l’éditeur :
 
 ```text
 Parallel agents
-● api      running   ../pi/agent-api-refactor
-● tests    waiting   ../pi/agent-tests
-✖ docs     failed    ../pi/agent-docs
+● api      running    worktree  gpt-5.5/high   ../pi/agent-api-refactor   session abc123
+● triage   running    current   gpt-5.5/high   ./                          shared repo
+● tests    waiting    worktree  gpt-5.5/high   ../pi/agent-tests          session def456
+◼ docs     stopped    worktree  gpt-5.5/high   ../pi/agent-docs           resumable
+✖ ui       crashed    worktree  gpt-5.5/high   ../pi/agent-ui             resumable
 ```
 
 Implémentation avec :
 
 ```ts
-ctx.ui.setWidget("parallel-agents", lines)
+ctx.ui.setWidget("parallel-agents", lines);
 ```
 
 ### Overlay interactif
@@ -142,13 +368,14 @@ Ajouter un raccourci, par exemple `ctrl+alt+a`, ouvrant un overlay TUI :
 │ ... streaming output tail ...                │
 ├ steer api ───────────────────────────────────┤
 │ > focus only on public API compatibility     │
-└ enter steer • tab switch • esc close ─────────┘
+└ enter steer • ctrl+enter queue • tab switch • esc close ─┘
 ```
 
-L’input de l’overlay envoie un message `steer` au sous-agent sélectionné :
+L’input de l’overlay peut envoyer un message `steer` ou ajouter une question dans la queue du sous-agent sélectionné :
 
 ```json
 {"type": "steer", "message": "..."}
+{"type": "follow_up", "message": "..."}
 ```
 
 ## Questions des sous-agents à l’utilisateur
@@ -186,7 +413,7 @@ Should I change the public route names?
 Puis le parent renvoie au processus RPC du sous-agent :
 
 ```json
-{"type": "extension_ui_response", "id": "...", "value": "..."}
+{ "type": "extension_ui_response", "id": "...", "value": "..." }
 ```
 
 ## Questions des sous-agents à l’agent principal
@@ -197,8 +424,8 @@ Chaque sous-agent reçoit un tool :
 
 ```ts
 ask_main_agent({
-  question: "Should I preserve backwards compatibility for /v1/users?"
-})
+  question: "Should I preserve backwards compatibility for /v1/users?",
+});
 ```
 
 Quand ce tool est appelé :
@@ -219,18 +446,258 @@ Quand ce tool est appelé :
    ```ts
    reply_to_subagent({
      questionId: "...",
-     answer: "Yes, preserve backwards compatibility."
-   })
+     answer: "Yes, preserve backwards compatibility.",
+   });
    ```
 
 4. le parent transmet la réponse au sous-agent.
+
+## Questions de l’agent principal aux sous-agents
+
+L’agent principal doit aussi pouvoir poser une question à un sous-agent et choisir le mode de livraison :
+
+- `steer` : question injectée rapidement dans le flux courant du sous-agent ;
+- `queue` : question ajoutée à la file du sous-agent sans interrompre son travail courant.
+
+Tool côté main agent :
+
+```ts
+ask_subagent({
+  agentId: "api",
+  question:
+    "Peux-tu vérifier si ce changement casse la compatibilité publique ?",
+  delivery: "steer", // "steer" | "queue"
+  expectAnswer: true,
+});
+```
+
+Commande TUI équivalente :
+
+```text
+/agents-ask <id> --mode steer <question>
+/agents-ask <id> --mode queue <question>
+```
+
+Chaque question reçoit un `questionId`. Le message envoyé au sous-agent doit lui demander explicitement de répondre avec un tool dédié :
+
+```ts
+reply_to_main_agent({
+  questionId: "...",
+  answer: "...",
+  summary: "...",
+  files: ["..."],
+});
+```
+
+Comportement `delivery = "steer"` :
+
+1. si le sous-agent est en cours d’exécution, envoyer une commande RPC `steer` ;
+2. si le sous-agent est idle mais son processus RPC est vivant, envoyer un `prompt` immédiat ;
+3. si le sous-agent est `stopped` ou `crashed`, refuser le steer et proposer `queue` ou `/agents-resume <id>`.
+
+Comportement `delivery = "queue"` :
+
+1. ajouter la question dans une file FIFO persistée par sous-agent ;
+2. si le processus RPC est vivant et occupé, envoyer la question via `follow_up` ou la garder côté parent jusqu’à la fin du tour courant ;
+3. si le processus RPC est idle, envoyer la prochaine question en `prompt` ;
+4. si le processus est arrêté, conserver la question et la livrer automatiquement à la reprise ;
+5. marquer la question `pending`, `delivering`, `delivered`, puis `answered` quand `reply_to_main_agent` est reçu.
+
+### Consultation éphémère sans pollution de contexte
+
+Pour les questions qui ne doivent pas orienter le sous-agent source ni polluer son contexte, l’agent principal peut utiliser un tool court dédié :
+
+```ts
+consult_subagent_clone({
+  agentId: "api",
+  question: "Quel est le risque principal de cette approche ?",
+  thinking: "xhigh"
+})
+```
+
+Commande TUI équivalente :
+
+```text
+/agents-consult <id> <question>
+```
+
+Cette capacité est disponible uniquement pour les sous-agents `workspaceMode = "worktree"`. En mode `current`, elle doit être refusée, car un clone jetable ne peut pas garantir l’isolation de fichiers depuis le repo courant partagé.
+
+Le tool appelle un script dédié, par exemple :
+
+```bash
+scripts/consult-subagent-clone.sh \
+  --agent-id <id> \
+  --question "<question>" \
+  --thinking xhigh
+```
+
+La question est passée comme un seul argument `argv`, pas comme un chemin de fichier. Pour éviter les problèmes de quoting ou d’injection shell, l’extension doit appeler le script avec une API de type `spawn`/`execFile` et `shell: false`, jamais par concaténation dans une commande shell :
+
+```ts
+spawn(scriptPath, [
+  "--agent-id", agentId,
+  "--question", question,
+  "--thinking", "xhigh"
+], { shell: false })
+```
+
+Le script doit lire la valeur exacte de `--question`, refuser les octets NUL, appliquer une limite de taille raisonnable, et ne jamais faire `eval` ni réinterpréter la question comme du shell.
+
+Flux :
+
+1. attendre que le sous-agent source atteigne un point sûr (`turn_end` ou `agent_end`) ;
+2. créer un clone temporaire du sous-agent à partir de sa session Pi et de son worktree ;
+3. réutiliser la même configuration que la source (`provider`, `model`, tools, skills, extensions utiles), mais forcer `thinking = "xhigh"` par défaut ;
+4. lancer un Pi RPC temporaire dans le worktree clone ;
+5. envoyer la question au clone avec une consigne stricte : répondre à la question, ne pas orienter la source, ne pas modifier les fichiers sauf autorisation explicite ;
+6. récupérer la réponse via un tool de retour, par exemple `return_consult_answer({ answer, summary, files })` ;
+7. arrêter le Pi RPC temporaire ;
+8. supprimer le worktree temporaire, la branche temporaire et la session temporaire, sauf mode debug explicite ;
+9. retourner la réponse à l’agent principal.
+
+La question n’est jamais envoyée au sous-agent source. Elle n’apparaît donc ni dans sa queue, ni dans son historique de session, ni dans son contexte LLM. Le parent peut journaliser le résultat de consultation dans sa propre session et/ou dans SQLite, mais pas dans la session du sous-agent consulté.
+
+Ce canal est distinct des deux autres :
+
+- `steer` : oriente volontairement le sous-agent source ;
+- `queue` : ajoute une vraie question/tâche au contexte du sous-agent source ;
+- `consult_subagent_clone` : obtient une réponse depuis un clone jetable sans modifier le contexte source.
+
+### Persistance et livraison des questions
+
+La queue ne doit jamais être seulement en mémoire. La source de vérité doit être un fichier SQLite partagé par l’agent principal et les sous-agents.
+
+Option recommandée : utiliser `pi-tasks` comme couche de queue durable, car il fournit déjà :
+
+- un stockage SQLite ;
+- des listes ordonnées FIFO ;
+- des statuts persistants ;
+- des claims atomiques via `task_claims.claim_next` ;
+- une reprise après crash via `release_expired` ;
+- une surface de tools Pi/MCP déjà disponible.
+
+Le script d’amorçage doit forcer un chemin absolu commun pour éviter qu’un worktree utilise sa propre base relative :
+
+```bash
+export PI_TASKS_DB_PATH="<repoRoot>/.pi/parallel-agents/tasks.sqlite"
+```
+
+Même base SQLite + mêmes `list_id` = queues partagées entre session principale, worktrees, agents en mode `current`, et éventuels clients MCP.
+
+Organisation proposée dans `pi-tasks` :
+
+```text
+scope_type: workspace
+scope_key: <repoRoot>
+visibility: shared
+list_id: parallel-agent-questions:<parent-session-id>:<agent-id>
+```
+
+Chaque sous-agent possède une liste de questions. Chaque question est une task :
+
+```json
+{
+  "id": "q-123",
+  "list_id": "parallel-agent-questions:main-session:api",
+  "title": "Question for api: compatibilité publique",
+  "description": "Payload JSON: agentId, delivery, question, createdAt, expectedAnswer",
+  "notes": "deliveryStatus=pending; rpcCommand=null; deliveredAt=null",
+  "status": "todo"
+}
+```
+
+Mapping entre le protocole parallel-agents et `pi-tasks` :
+
+| État logique | `pi-tasks.status` | Détail                                        |
+| ------------ | ----------------- | --------------------------------------------- |
+| `pending`    | `todo`            | question créée, pas encore livrée             |
+| `delivering` | `in_progress`     | question claimée par le dispatcher parent     |
+| `delivered`  | `blocked`         | RPC accepté, attente de `reply_to_main_agent` |
+| `answered`   | `done`            | réponse stockée dans `outcome`                |
+| `canceled`   | `canceled`        | question annulée                              |
+
+Flux durable avec `pi-tasks` :
+
+1. création de question : `task_items.create` avec `id = questionId`, `status = todo`, et payload dans `description`/`notes` ;
+2. tentative de livraison : le dispatcher appelle `task_claims.claim_next` sur la liste du sous-agent ;
+3. si une task est claimée, envoyer la question au sous-agent via `steer`, `follow_up` ou `prompt` selon le mode et l’état RPC ;
+4. quand RPC accepte la commande, `task_items.update` passe la task en `blocked` avec `notes.deliveryStatus = delivered` ;
+5. quand `reply_to_main_agent` arrive, `task_items.update` passe la task en `done` et écrit la réponse dans `outcome` ;
+6. si l’agent principal crashe en `in_progress`, le claim expire puis `task_claims.release_expired` remet la task en `todo`, donc elle redevient livrable.
+
+Au démarrage ou redémarrage de l’agent principal, l’extension :
+
+1. ouvre la même base via `PI_TASKS_DB_PATH` ;
+2. retrouve les listes `parallel-agent-questions:*` du `repoRoot` ;
+3. appelle `task_claims.release_expired` ;
+4. relit les tasks `todo`, `in_progress`, `blocked`, `done` ;
+5. reconstruit les queues en mémoire depuis SQLite ;
+6. relivre uniquement les tasks `todo`.
+
+Les tasks `blocked` représentent des questions déjà livrées mais sans réponse. Elles ne sont pas relivrées automatiquement, sauf commande explicite de retry ou si le parent détecte que la livraison RPC n’a jamais réellement été acceptée.
+
+Le `questionId` rend la livraison idempotente : si une question est envoyée deux fois après un crash entre l’appel RPC et l’écriture de l’état `blocked`, le parent déduplique les réponses par `questionId` et ne marque la task `done` qu’une seule fois.
+
+Le parent injecte ensuite la réponse dans la session principale sous forme de message visible, par exemple :
+
+```text
+Sub-agent api answered question q-123:
+"Oui, le changement casse /v1/users si on ne garde pas l’alias."
+```
+
+## Cycle de vie : arrêt et reprise
+
+L’agent principal doit pouvoir contrôler chaque enfant à tout moment.
+
+### Arrêt d’un agent enfant
+
+Commande côté main agent :
+
+```text
+/agents-stop <id>
+```
+
+Comportement :
+
+1. si l’enfant est en train de travailler, envoyer d’abord une commande RPC `abort` ;
+2. attendre une fin propre du tour courant si possible ;
+3. fermer le transport RPC et terminer le processus enfant (`SIGTERM`, puis `SIGKILL` en dernier recours) ;
+4. marquer l’agent comme `stopped` ;
+5. conserver son `workspaceMode`, `cwd`, `worktreePath`, `branchName`, `sessionId`, `sessionFile`, `provider`, `model` et `thinking`.
+
+Arrêter un agent ne doit jamais supprimer son worktree éventuel ni sa session Pi.
+
+### Reprise d’un agent enfant
+
+Commande côté main agent :
+
+```text
+/agents-resume <id>
+```
+
+Comportement :
+
+1. relire les métadonnées persistées de l’enfant ;
+2. rappeler `scripts/start-parallel-agent.sh` avec `--resume-session <session-file-or-id>`, `--workspace-mode`, `--cwd <cwd>`, `--provider`, `--model` et `--thinking` ;
+3. relancer Pi RPC dans le même workspace avec la session sauvegardée ;
+4. récupérer le nouveau `pid` et l’état courant via `get_state` ;
+5. marquer l’agent comme `running` ou `waiting` ;
+6. permettre ensuite au parent d’envoyer un `steer`, un `follow_up` ou un nouveau prompt.
+
+En cas de crash ou de fermeture inattendue du processus enfant, le parent marque l’agent comme `crashed` ou `stopped`, mais le garde reprenable tant que `sessionFile` et `cwd` existent.
 
 ## Gestion des résultats
 
 Chaque sous-agent produit :
 
-- une branche git ;
-- un worktree ;
+- un `workspaceMode` (`worktree` ou `current`) ;
+- un `cwd` effectif ;
+- une branche git et un worktree si `workspaceMode = "worktree"` ;
+- aucune branche/worktree dédié si `workspaceMode = "current"` ;
+- une session Pi persistée (`sessionId`, `sessionFile`) ;
+- le modèle et le niveau de thinking utilisés ;
+- les questions/réponses échangées avec l’agent principal ;
 - un résumé final ;
 - un diff ;
 - les tests exécutés ;
@@ -242,31 +709,49 @@ L’extension expose des commandes :
 /agents
 /agents-open <id>
 /agents-steer <id> <message>
+/agents-ask <id> --mode steer|queue <question>
+/agents-consult <id> <question>
 /agents-stop <id>
+/agents-resume <id>
+/agents-defaults [--model <model>] [--thinking <level>]
 /agents-summary
 /agents-merge <id>
 /agents-clean
 ```
 
-Et un tool côté main agent :
+Et des tools côté main agent :
 
 ```ts
-collect_subagent_results()
+ask_subagent({ agentId, question, delivery: "steer" | "queue" });
+consult_subagent_clone({ agentId, question, thinking: "xhigh" });
+collect_subagent_results();
 ```
 
-qui retourne une synthèse :
+Le tool `collect_subagent_results()` retourne une synthèse :
 
 ```text
 api:
+- workspaceMode: worktree
+- cwd: ../pi/agent-api-refactor
 - branch: agent-api-refactor
 - worktree: ../pi/agent-api-refactor
+- model: gpt-5.5
+- thinking: high
+- sessionId: abc123
+- sessionFile: /Users/.../.pi/agent/sessions/...jsonl
 - status: done
 - summary: ...
 - changed files: ...
 
-tests:
-- branch: agent-tests
-- worktree: ../pi/agent-tests
+triage:
+- workspaceMode: current
+- cwd: /path/to/repo
+- branch: current checkout
+- worktree: none
+- model: gpt-5.5
+- thinking: high
+- sessionId: def456
+- sessionFile: /Users/.../.pi/agent/sessions/...jsonl
 - status: done
 - summary: ...
 - changed files: ...
@@ -277,19 +762,31 @@ tests:
 Construire d’abord :
 
 1. extension Pi `parallel-agents.ts` ;
-2. tool `launch_parallel_agents` ;
-3. création des worktrees dans `../pi/<branch-name>` ;
-4. lancement de Pi RPC par sous-agent ;
-5. streaming des events dans un widget TUI ;
-6. commande `/agents` pour afficher l’état ;
-7. commande `/agents-steer <id> <message>`.
+2. script shell `scripts/start-parallel-agent.sh` ;
+3. configuration par défaut `model = "gpt-5.5"`, `thinking = "high"` ;
+4. commande `/agents-defaults [--model <model>] [--thinking <level>]` ;
+5. tool `launch_parallel_agents` avec override global ou par agent ;
+6. support de `workspaceMode: "worktree" | "current"` dans `launch_parallel_agents` ;
+7. appel d’un naming agent Pi pour proposer `worktreeName`/`branchName` en mode `worktree` ;
+8. création des worktrees dans `../pi/<worktree-name>` par le script en mode `worktree` ;
+9. lancement de Pi RPC depuis le worktree ou directement depuis `repoRoot` en mode `current`, avec `model`/`thinking` résolus ;
+10. récupération et persistance de `sessionId`/`sessionFile` ;
+11. configuration d’une base SQLite partagée pour les queues (`PI_TASKS_DB_PATH`) ;
+12. intégration préférée avec `pi-tasks` pour stocker les questions FIFO ;
+13. streaming des events dans un widget TUI ;
+14. commande `/agents` pour afficher l’état ;
+15. commande `/agents-steer <id> <message>` ;
+16. tool/commande `ask_subagent` / `/agents-ask` avec livraison `steer` ou `queue` ;
+17. tool/commande `consult_subagent_clone` / `/agents-consult` pour consultation éphémère sans pollution de contexte ;
+18. commande `/agents-stop <id>` ;
+19. commande `/agents-resume <id>`.
 
 Ensuite :
 
-8. overlay TUI interactif complet ;
-9. bridge `ask_user` via `extension_ui_request` ;
-10. bridge `ask_main_agent` / `reply_to_subagent` ;
-11. review/merge assisté des résultats.
+20. overlay TUI interactif complet ;
+21. bridge `ask_user` via `extension_ui_request` ;
+22. bridge `ask_main_agent` / `reply_to_subagent` ;
+23. review/merge assisté des résultats.
 
 ## Décision d’architecture
 
@@ -298,7 +795,15 @@ Ne pas forker la session Pi principale.
 Préférer :
 
 - un agent principal orchestrateur ;
-- N sous-agents isolés dans leurs worktrees ;
-- une communication explicite via RPC et tools bridge.
+- un script shell comme frontière claire de création/reprise ;
+- un naming agent Pi pour transformer le contexte en nom de worktree/branche pertinent ;
+- une configuration explicite `model`/`thinking` des sous-agents, avec défaut `gpt-5.5`/`high` ;
+- N sous-agents isolés dans leurs worktrees par défaut ;
+- un mode opt-in sans worktree pour lancer un sous-agent directement dans le repo courant ;
+- une session Pi persistée par sous-agent ;
+- une base SQLite partagée pour l’état durable des queues ;
+- `pi-tasks` comme implémentation privilégiée des files FIFO de questions ;
+- un canal `consult_subagent_clone` pour interroger un clone jetable d’un agent worktree sans polluer le contexte source ;
+- une communication explicite via RPC et tools bridge, dans les deux sens : sous-agent vers principal et principal vers sous-agent.
 
-Cette approche est plus robuste, plus facile à tuer/reprendre, et évite les collisions de fichiers.
+Cette approche est plus robuste, plus facile à tuer/reprendre, et évite les collisions de fichiers dans le mode par défaut. Le mode sans worktree est volontairement explicite car il accepte le risque de collisions de fichiers dans le repo courant.

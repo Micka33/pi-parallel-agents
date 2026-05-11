@@ -371,11 +371,11 @@ Ajouter un raccourci, par exemple `ctrl+alt+a`, ouvrant un overlay TUI :
 └ enter steer • ctrl+enter queue • tab switch • esc close ─┘
 ```
 
-L’input de l’overlay peut envoyer un message `steer` ou ajouter une question dans la queue du sous-agent sélectionné :
+L’input de l’overlay appelle la même primitive que les tools : `message_parallel_agent`. Il peut envoyer un message `steer` ou ajouter une question dans la queue du sous-agent sélectionné :
 
 ```json
-{"type": "steer", "message": "..."}
-{"type": "follow_up", "message": "..."}
+{"mode": "steer", "message": "..."}
+{"mode": "queue", "message": "..."}
 ```
 
 ## Questions des sous-agents à l’utilisateur
@@ -416,112 +416,80 @@ Puis le parent renvoie au processus RPC du sous-agent :
 { "type": "extension_ui_response", "id": "...", "value": "..." }
 ```
 
-## Questions des sous-agents à l’agent principal
+## Messagerie entre agents
 
-Créer un bridge explicite.
-
-Chaque sous-agent reçoit un tool :
+L’extension expose une primitive unique pour envoyer un message à un agent ou à l’agent principal :
 
 ```ts
-ask_main_agent({
-  question: "Should I preserve backwards compatibility for /v1/users?",
-});
-```
-
-Quand ce tool est appelé :
-
-1. le parent crée une question en attente ;
-2. le parent injecte dans la session principale un message du type :
-
-   ```text
-   Sub-agent api asks:
-
-   "Should I preserve backwards compatibility for /v1/users?"
-
-   Réponds avec le tool reply_to_subagent.
-   ```
-
-3. le main agent répond via :
-
-   ```ts
-   reply_to_subagent({
-     questionId: "...",
-     answer: "Yes, preserve backwards compatibility.",
-   });
-   ```
-
-4. le parent transmet la réponse au sous-agent.
-
-## Questions de l’agent principal aux sous-agents
-
-L’agent principal doit aussi pouvoir poser une question à un sous-agent et choisir le mode de livraison :
-
-- `steer` : question injectée rapidement dans le flux courant du sous-agent ;
-- `queue` : question ajoutée à la file du sous-agent sans interrompre son travail courant.
-
-Tool côté main agent :
-
-```ts
-ask_subagent({
-  agentId: "api",
-  question:
-    "Peux-tu vérifier si ce changement casse la compatibilité publique ?",
-  delivery: "steer", // "steer" | "queue"
+message_parallel_agent({
+  target: "api", // agentId ou "main"
+  message: "Peux-tu vérifier si ce changement casse la compatibilité publique ?",
+  mode: "steer", // "steer" | "queue" | "consult"
   expectAnswer: true,
+  thinking: "xhigh" // optionnel, surtout utile pour mode="consult"
 });
 ```
 
-Commande TUI équivalente :
-
-```text
-/agents-ask <id> --mode steer <question>
-/agents-ask <id> --mode queue <question>
-```
-
-Chaque question reçoit un `questionId`. Le message envoyé au sous-agent doit lui demander explicitement de répondre avec un tool dédié :
+Et une primitive unique pour répondre à une question :
 
 ```ts
-reply_to_main_agent({
+reply_parallel_question({
   questionId: "...",
   answer: "...",
   summary: "...",
-  files: ["..."],
+  files: ["..."]
 });
 ```
 
-Comportement `delivery = "steer"` :
+Commandes TUI équivalentes :
+
+```text
+/agents-steer <id> <message>              # message_parallel_agent(mode="steer")
+/agents-ask <id> --mode steer <question>  # message_parallel_agent(mode="steer", expectAnswer=true)
+/agents-ask <id> --mode queue <question>  # message_parallel_agent(mode="queue", expectAnswer=true)
+/agents-consult <id> <question>           # message_parallel_agent(mode="consult", thinking="xhigh")
+```
+
+### Sous-agent vers agent principal
+
+Un sous-agent pose une question au parent avec :
+
+```ts
+message_parallel_agent({
+  target: "main",
+  message: "Should I preserve backwards compatibility for /v1/users?",
+  mode: "queue",
+  expectAnswer: true
+});
+```
+
+Le parent crée un `questionId`, injecte un message visible dans la session principale, puis le main agent répond via `reply_parallel_question`. La réponse est ensuite transmise au sous-agent demandeur.
+
+### Agent principal vers sous-agent
+
+L’agent principal peut choisir le mode de livraison :
+
+- `steer` : oriente volontairement le sous-agent source ;
+- `queue` : ajoute une vraie question/tâche au contexte du sous-agent source ;
+- `consult` : interroge un clone jetable sans modifier le contexte source.
+
+Comportement `mode = "steer"` :
 
 1. si le sous-agent est en cours d’exécution, envoyer une commande RPC `steer` ;
 2. si le sous-agent est idle mais son processus RPC est vivant, envoyer un `prompt` immédiat ;
 3. si le sous-agent est `stopped` ou `crashed`, refuser le steer et proposer `queue` ou `/agents-resume <id>`.
 
-Comportement `delivery = "queue"` :
+Comportement `mode = "queue"` :
 
 1. ajouter la question dans une file FIFO persistée par sous-agent ;
 2. si le processus RPC est vivant et occupé, envoyer la question via `follow_up` ou la garder côté parent jusqu’à la fin du tour courant ;
 3. si le processus RPC est idle, envoyer la prochaine question en `prompt` ;
 4. si le processus est arrêté, conserver la question et la livrer automatiquement à la reprise ;
-5. marquer la question `pending`, `delivering`, `delivered`, puis `answered` quand `reply_to_main_agent` est reçu.
+5. marquer la question `pending`, `delivering`, `delivered`, puis `answered` quand `reply_parallel_question` est reçu.
 
 ### Consultation éphémère sans pollution de contexte
 
-Pour les questions qui ne doivent pas orienter le sous-agent source ni polluer son contexte, l’agent principal peut utiliser un tool court dédié :
-
-```ts
-consult_subagent_clone({
-  agentId: "api",
-  question: "Quel est le risque principal de cette approche ?",
-  thinking: "xhigh"
-})
-```
-
-Commande TUI équivalente :
-
-```text
-/agents-consult <id> <question>
-```
-
-Cette capacité est disponible uniquement pour les sous-agents `workspaceMode = "worktree"`. En mode `current`, elle doit être refusée, car un clone jetable ne peut pas garantir l’isolation de fichiers depuis le repo courant partagé.
+Le mode `consult` sert aux questions qui ne doivent pas orienter le sous-agent source ni polluer son contexte. Il est disponible uniquement pour les sous-agents `workspaceMode = "worktree"`. En mode `current`, il doit être refusé, car un clone jetable ne peut pas garantir l’isolation de fichiers depuis le repo courant partagé.
 
 Le tool appelle un script dédié, par exemple :
 
@@ -544,25 +512,19 @@ spawn(scriptPath, [
 
 Le script doit lire la valeur exacte de `--question`, refuser les octets NUL, appliquer une limite de taille raisonnable, et ne jamais faire `eval` ni réinterpréter la question comme du shell.
 
-Flux :
+Flux `consult` :
 
 1. attendre que le sous-agent source atteigne un point sûr (`turn_end` ou `agent_end`) ;
 2. créer un clone temporaire du sous-agent à partir de sa session Pi et de son worktree ;
 3. réutiliser la même configuration que la source (`provider`, `model`, tools, skills, extensions utiles), mais forcer `thinking = "xhigh"` par défaut ;
 4. lancer un Pi RPC temporaire dans le worktree clone ;
 5. envoyer la question au clone avec une consigne stricte : répondre à la question, ne pas orienter la source, ne pas modifier les fichiers sauf autorisation explicite ;
-6. récupérer la réponse via un tool de retour, par exemple `return_consult_answer({ answer, summary, files })` ;
+6. récupérer la réponse via `reply_parallel_question` avec un `questionId` marqué comme consultation ;
 7. arrêter le Pi RPC temporaire ;
 8. supprimer le worktree temporaire, la branche temporaire et la session temporaire, sauf mode debug explicite ;
 9. retourner la réponse à l’agent principal.
 
 La question n’est jamais envoyée au sous-agent source. Elle n’apparaît donc ni dans sa queue, ni dans son historique de session, ni dans son contexte LLM. Le parent peut journaliser le résultat de consultation dans sa propre session et/ou dans SQLite, mais pas dans la session du sous-agent consulté.
-
-Ce canal est distinct des deux autres :
-
-- `steer` : oriente volontairement le sous-agent source ;
-- `queue` : ajoute une vraie question/tâche au contexte du sous-agent source ;
-- `consult_subagent_clone` : obtient une réponse depuis un clone jetable sans modifier le contexte source.
 
 ### Persistance et livraison des questions
 
@@ -613,7 +575,7 @@ Mapping entre le protocole parallel-agents et `pi-tasks` :
 | ------------ | ----------------- | --------------------------------------------- |
 | `pending`    | `todo`            | question créée, pas encore livrée             |
 | `delivering` | `in_progress`     | question claimée par le dispatcher parent     |
-| `delivered`  | `blocked`         | RPC accepté, attente de `reply_to_main_agent` |
+| `delivered`  | `blocked`         | RPC accepté, attente de `reply_parallel_question` |
 | `answered`   | `done`            | réponse stockée dans `outcome`                |
 | `canceled`   | `canceled`        | question annulée                              |
 
@@ -623,7 +585,7 @@ Flux durable avec `pi-tasks` :
 2. tentative de livraison : le dispatcher appelle `task_claims.claim_next` sur la liste du sous-agent ;
 3. si une task est claimée, envoyer la question au sous-agent via `steer`, `follow_up` ou `prompt` selon le mode et l’état RPC ;
 4. quand RPC accepte la commande, `task_items.update` passe la task en `blocked` avec `notes.deliveryStatus = delivered` ;
-5. quand `reply_to_main_agent` arrive, `task_items.update` passe la task en `done` et écrit la réponse dans `outcome` ;
+5. quand `reply_parallel_question` arrive, `task_items.update` passe la task en `done` et écrit la réponse dans `outcome` ;
 6. si l’agent principal crashe en `in_progress`, le claim expire puis `task_claims.release_expired` remet la task en `todo`, donc elle redevient livrable.
 
 Au démarrage ou redémarrage de l’agent principal, l’extension :
@@ -703,7 +665,7 @@ Chaque sous-agent produit :
 - les tests exécutés ;
 - son statut final.
 
-L’extension expose des commandes :
+L’extension expose les commandes TUI suivantes :
 
 ```text
 /agents
@@ -715,19 +677,55 @@ L’extension expose des commandes :
 /agents-resume <id>
 /agents-defaults [--model <model>] [--thinking <level>]
 /agents-summary
-/agents-merge <id>
 /agents-clean
 ```
 
-Et des tools côté main agent :
+Tools exposés côté agents :
 
 ```ts
-ask_subagent({ agentId, question, delivery: "steer" | "queue" });
-consult_subagent_clone({ agentId, question, thinking: "xhigh" });
-collect_subagent_results();
+launch_parallel_agents(...);
+message_parallel_agent({ target, message, mode: "steer" | "queue" | "consult", expectAnswer? });
+reply_parallel_question({ questionId, answer, summary?, files? });
+get_parallel_agents({ agentId?, include?: ["status", "queues", "results", "summary", "diff", "logs"] });
+control_parallel_agent({ action: "stop" | "resume" | "set_defaults" | "clean", agentId?, ... });
 ```
 
-Le tool `collect_subagent_results()` retourne une synthèse :
+Implémentation des commandes :
+
+| Commande | Tool interne |
+| --- | --- |
+| `/agents`, `/agents-open`, `/agents-summary` | `get_parallel_agents` |
+| `/agents-steer`, `/agents-ask`, `/agents-consult` | `message_parallel_agent` |
+| `/agents-stop`, `/agents-resume`, `/agents-defaults` | `control_parallel_agent` |
+| `/agents-clean` | `control_parallel_agent` |
+
+`/agents-summary` utilise la lecture suivante :
+
+```ts
+get_parallel_agents({ include: ["status", "results", "summary"] });
+```
+
+`/agents-clean` passe par `control_parallel_agent` et doit rester conservateur par défaut :
+
+```ts
+control_parallel_agent({
+  action: "clean",
+  agentId: "api",
+  removeWorktree: true,
+  removeBranch: false,
+  removeSession: false,
+  force: false
+});
+```
+
+Règles de sécurité pour `clean` :
+
+- ne jamais supprimer une branche sans confirmation explicite ;
+- ne jamais supprimer une session sans option explicite ;
+- refuser un worktree dirty sauf `force: true` ;
+- accepter aussi un scope global, par exemple `scope: "done"`, pour nettoyer plusieurs agents terminés.
+
+Le tool `get_parallel_agents()` retourne une synthèse :
 
 ```text
 api:
@@ -763,8 +761,8 @@ Construire d’abord :
 
 1. extension Pi `parallel-agents.ts` ;
 2. script shell `scripts/start-parallel-agent.sh` ;
-3. configuration par défaut `model = "gpt-5.5"`, `thinking = "high"` ;
-4. commande `/agents-defaults [--model <model>] [--thinking <level>]` ;
+3. tools exposés : `launch_parallel_agents`, `message_parallel_agent`, `reply_parallel_question`, `get_parallel_agents`, `control_parallel_agent` ;
+4. configuration par défaut `model = "gpt-5.5"`, `thinking = "high"` via `control_parallel_agent({ action: "set_defaults" })` ;
 5. tool `launch_parallel_agents` avec override global ou par agent ;
 6. support de `workspaceMode: "worktree" | "current"` dans `launch_parallel_agents` ;
 7. appel d’un naming agent Pi pour proposer `worktreeName`/`branchName` en mode `worktree` ;
@@ -774,19 +772,16 @@ Construire d’abord :
 11. configuration d’une base SQLite partagée pour les queues (`PI_TASKS_DB_PATH`) ;
 12. intégration préférée avec `pi-tasks` pour stocker les questions FIFO ;
 13. streaming des events dans un widget TUI ;
-14. commande `/agents` pour afficher l’état ;
-15. commande `/agents-steer <id> <message>` ;
-16. tool/commande `ask_subagent` / `/agents-ask` avec livraison `steer` ou `queue` ;
-17. tool/commande `consult_subagent_clone` / `/agents-consult` pour consultation éphémère sans pollution de contexte ;
-18. commande `/agents-stop <id>` ;
-19. commande `/agents-resume <id>`.
+14. commande `/agents` implémentée via `get_parallel_agents` ;
+15. commandes `/agents-steer`, `/agents-ask`, `/agents-consult` implémentées via `message_parallel_agent` ;
+16. commandes `/agents-stop`, `/agents-resume`, `/agents-defaults` implémentées via `control_parallel_agent` ;
+17. commandes `/agents-summary` et `/agents-clean` implémentées via `get_parallel_agents` ou `control_parallel_agent`.
 
 Ensuite :
 
-20. overlay TUI interactif complet ;
-21. bridge `ask_user` via `extension_ui_request` ;
-22. bridge `ask_main_agent` / `reply_to_subagent` ;
-23. review/merge assisté des résultats.
+18. overlay TUI interactif complet ;
+19. bridge `ask_user` via `extension_ui_request` ;
+20. review assistée des résultats.
 
 ## Décision d’architecture
 
@@ -803,7 +798,7 @@ Préférer :
 - une session Pi persistée par sous-agent ;
 - une base SQLite partagée pour l’état durable des queues ;
 - `pi-tasks` comme implémentation privilégiée des files FIFO de questions ;
-- un canal `consult_subagent_clone` pour interroger un clone jetable d’un agent worktree sans polluer le contexte source ;
+- un mode `consult` dans `message_parallel_agent` pour interroger un clone jetable d’un agent worktree sans polluer le contexte source ;
 - une communication explicite via RPC et tools bridge, dans les deux sens : sous-agent vers principal et principal vers sous-agent.
 
 Cette approche est plus robuste, plus facile à tuer/reprendre, et évite les collisions de fichiers dans le mode par défaut. Le mode sans worktree est volontairement explicite car il accepte le risque de collisions de fichiers dans le repo courant.

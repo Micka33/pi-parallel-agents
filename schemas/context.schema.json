@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ParallelAgentContext",
+  "type": "object",
+  "required": ["repoRoot", "name", "agentPrompt"],
+  "properties": {
+    "repoRoot": { "type": "string" },
+    "parentSessionId": { "type": "string" },
+    "parentPrompt": { "type": "string" },
+    "agentPrompt": { "type": "string" },
+    "name": { "type": "string" },
+    "suggestedName": { "type": "string" },
+    "provider": { "type": "string" },
+    "model": { "type": "string", "default": "gpt-5.5" },
+    "thinking": { "type": "string", "default": "high" },
+    "workspaceMode": { "enum": ["worktree", "current"], "default": "worktree" },
+    "accessMode": { "enum": ["read_only", "write"] }
+  },
+  "additionalProperties": true
+}

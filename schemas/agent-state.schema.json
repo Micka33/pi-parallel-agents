@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ParallelAgentState",
+  "type": "object",
+  "required": ["agent_id", "parent_session_id", "display_name", "repo_root", "status", "workspace_mode", "access_mode", "cwd", "created_at", "updated_at"],
+  "properties": {
+    "agent_id": { "type": "string" },
+    "parent_session_id": { "type": "string" },
+    "display_name": { "type": "string" },
+    "repo_root": { "type": "string" },
+    "status": { "enum": ["starting", "running", "waiting", "stopped", "crashed", "done", "cleaned"] },
+    "workspace_mode": { "enum": ["worktree", "current"] },
+    "access_mode": { "enum": ["read_only", "write"] },
+    "pid": { "type": ["integer", "null"] },
+    "cwd": { "type": "string" },
+    "worktree_path": { "type": ["string", "null"] },
+    "branch_name": { "type": ["string", "null"] },
+    "provider": { "type": ["string", "null"] },
+    "model": { "type": ["string", "null"] },
+    "thinking": { "type": ["string", "null"] },
+    "session_id": { "type": ["string", "null"] },
+    "session_file": { "type": ["string", "null"] },
+    "summary": { "type": ["string", "null"] },
+    "diff_summary": { "type": ["string", "null"] },
+    "tests_json": { "type": ["string", "null"] },
+    "last_error": { "type": ["string", "null"] },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": "string" }
+  },
+  "additionalProperties": false
+}

@@ -934,19 +934,19 @@ triage:
 
 Objectif : lancer des agents et les observer de manière fiable.
 
-1. extension Pi `parallel-agents.ts` ;
-2. scripts `start-parallel-agent.sh` et `parallel-agent-state.sh` ;
-3. base SQLite `state.sqlite` avec tables `agents`, `agent_events`, `settings` ;
-4. tool `launch_parallel_agents` ;
-5. tool `get_parallel_agents` ;
-6. commandes `/agents`, `/agents-open`, `/agents-summary` ;
-7. configuration par défaut `model = "gpt-5.5"`, `thinking = "high"` ;
-8. support `workspaceMode = "worktree"` avec création de worktree dans `../pi/<worktree-name>` ;
-9. naming agent appelé par le script, avec le modèle du sous-agent, `thinking = "off"` et `--no-tools` ;
-10. support `workspaceMode = "current"` en `accessMode = "read_only"` par défaut ;
-11. lancement Pi RPC avec commandes vérifiées (`prompt`, `get_state`, `set_thinking_level`) ;
-12. récupération et persistance de `sessionId`/`sessionFile` ;
-13. widget TUI minimal avec statut, workspace, modèle/thinking et session.
+- [x] extension Pi `parallel-agents.ts` ;
+- [x] scripts `start-parallel-agent.sh` et `parallel-agent-state.sh` ;
+- [x] base SQLite `state.sqlite` avec tables `agents`, `agent_events`, `settings` ;
+- [x] tool `launch_parallel_agents` ;
+- [x] tool `get_parallel_agents` ;
+- [x] commandes `/agents`, `/agents-open`, `/agents-summary` ;
+- [x] configuration par défaut `model = "gpt-5.5"`, `thinking = "high"` ;
+- [x] support `workspaceMode = "worktree"` avec création de worktree dans `../pi/<worktree-name>` ;
+- [x] naming agent appelé par le script, avec le modèle du sous-agent, `thinking = "off"` et `--no-tools` ;
+- [x] support `workspaceMode = "current"` en `accessMode = "read_only"` par défaut ;
+- [x] lancement Pi RPC avec commandes vérifiées (`prompt`, `get_state`, `set_thinking_level`) ;
+- [x] récupération et persistance de `sessionId`/`sessionFile` ;
+- [x] widget TUI minimal avec statut, workspace, modèle/thinking et session.
 
 ### Version 2 — contrôle et messagerie durable
 

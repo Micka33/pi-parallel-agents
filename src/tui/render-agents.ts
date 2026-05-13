@@ -1,6 +1,7 @@
 import { relative } from "node:path";
 import { statusGlyph } from "../state/selectors.js";
 import type { ParallelAgent } from "../state/types.js";
+import { renderQueueList } from "./render-queues.js";
 
 export function renderAgentLine(agent: ParallelAgent, repoRoot: string): string {
   const workspace = agent.workspaceMode === "current" ? "current/read-only" : "worktree";
@@ -30,6 +31,9 @@ export function renderAgentDetails(agent: ParallelAgent, repoRoot: string): stri
     `- sessionFile: ${agent.sessionFile ?? "none"}`,
     `- summary: ${agent.summary ?? "none"}`,
     agent.lastError ? `- lastError: ${agent.lastError}` : undefined,
+    agent.commands?.length ? `- commands:\n${agent.commands.map((command) => `  #${command.id} ${command.command_type}/${command.status}${command.last_error ? `: ${command.last_error}` : ""}`).join("\n")}` : undefined,
+    agent.queue ? `- queue:\n${indent(renderQueueList(agent.queue), "  ")}` : undefined,
+    agent.events?.length ? `- event tail:\n${agent.events.slice(-8).map((event) => `  #${event.id} ${event.event_type} ${truncate(event.payload_json ?? "", 120)}`).join("\n")}` : undefined,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
@@ -42,6 +46,17 @@ export function renderAgentsSummary(agents: ParallelAgent[], repoRoot: string): 
       const heading = renderAgentLine(agent, repoRoot);
       return agent.summary ? `${heading}\n  ${agent.summary}` : heading;
     })
+    .join("\n");
+}
+
+function truncate(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+function indent(text: string, prefix: string): string {
+  return text
+    .split("\n")
+    .map((line) => `${prefix}${line}`)
     .join("\n");
 }
 

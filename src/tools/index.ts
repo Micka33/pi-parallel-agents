@@ -1,11 +1,20 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { launchParallelAgents } from "./launch-parallel-agents.js";
 import { getParallelAgents } from "./get-parallel-agents.js";
+import { controlParallelAgent } from "./control-parallel-agent.js";
+import { messageParallelAgent } from "./message-parallel-agent.js";
+import { replyParallelQuestion } from "./reply-parallel-question.js";
 import {
+  ControlParallelAgentParams,
   GetParallelAgentsParams,
   LaunchParallelAgentsParams,
+  MessageParallelAgentParams,
+  ReplyParallelQuestionParams,
+  type ControlParallelAgentInput,
   type GetParallelAgentsInput,
   type LaunchParallelAgentsInput,
+  type MessageParallelAgentInput,
+  type ReplyParallelQuestionInput,
 } from "./schemas.js";
 
 export function registerParallelAgentTools(pi: ExtensionAPI): void {
@@ -35,6 +44,45 @@ export function registerParallelAgentTools(pi: ExtensionAPI): void {
     parameters: GetParallelAgentsParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const output = getParallelAgents(params as GetParallelAgentsInput, ctx);
+      return jsonResult(output);
+    },
+  });
+
+  pi.registerTool({
+    name: "control_parallel_agent",
+    label: "Control Parallel Agent",
+    description: "Stop, resume, refresh, mark done, clean, or set defaults for persisted parallel agents.",
+    promptSnippet: "Control a parallel Pi sub-agent lifecycle or defaults.",
+    promptGuidelines: ["Use stop before clean; do not remove worktrees, branches, or sessions unless explicitly requested."],
+    parameters: ControlParallelAgentParams,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const output = await controlParallelAgent(params as ControlParallelAgentInput, ctx);
+      return jsonResult(output);
+    },
+  });
+
+  pi.registerTool({
+    name: "message_parallel_agent",
+    label: "Message Parallel Agent",
+    description: "Send steering or durable queued messages to a parallel child Pi agent.",
+    promptSnippet: "Send a steer or queue message to an existing parallel child agent.",
+    promptGuidelines: ["Use mode=steer for immediate guidance; use mode=queue for durable follow-up work."],
+    parameters: MessageParallelAgentParams,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const output = await messageParallelAgent(params as MessageParallelAgentInput, ctx);
+      return jsonResult(output);
+    },
+  });
+
+  pi.registerTool({
+    name: "reply_parallel_question",
+    label: "Reply Parallel Question",
+    description: "Answer a durable question raised by a parallel child Pi agent.",
+    promptSnippet: "Reply to an incoming parallel-agent UI question by questionId.",
+    promptGuidelines: ["Inspect get_parallel_agents include=['queues'] to find incoming questions before replying."],
+    parameters: ReplyParallelQuestionParams,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const output = await replyParallelQuestion(params as ReplyParallelQuestionInput, ctx);
       return jsonResult(output);
     },
   });

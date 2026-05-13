@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import type { AgentEventRow, AgentStateRow, ParallelAgentSettings } from "./types.js";
+import type { AgentCommandRow, AgentEventRow, AgentStateRow, ParallelAgentSettings } from "./types.js";
 
 export interface ReadAgentsOptions {
   agentId?: string;
@@ -32,6 +32,19 @@ export class StateReader {
         return db.prepare("SELECT * FROM agents WHERE repo_root = ? ORDER BY created_at ASC").all(options.repoRoot) as unknown as AgentStateRow[];
       }
       return db.prepare("SELECT * FROM agents ORDER BY created_at ASC").all() as unknown as AgentStateRow[];
+    } finally {
+      db.close();
+    }
+  }
+
+  readCommands(agentId: string, limit = 50): AgentCommandRow[] {
+    if (!this.exists()) return [];
+    const db = this.#open();
+    try {
+      return (db
+        .prepare("SELECT * FROM agent_commands WHERE agent_id = ? ORDER BY id DESC LIMIT ?")
+        .all(agentId, limit) as unknown as AgentCommandRow[])
+        .reverse();
     } finally {
       db.close();
     }

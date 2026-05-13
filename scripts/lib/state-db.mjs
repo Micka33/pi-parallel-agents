@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
-export const STATE_SCHEMA_VERSION = 1;
+export const STATE_SCHEMA_VERSION = 2;
 export const DEFAULT_MODEL = "gpt-5.5";
 export const DEFAULT_THINKING = "high";
 
@@ -33,6 +33,20 @@ export const AGENT_COLUMNS = [
   "last_error",
   "created_at",
   "updated_at",
+];
+
+export const COMMAND_COLUMNS = [
+  "id",
+  "agent_id",
+  "command_type",
+  "payload_json",
+  "status",
+  "response_json",
+  "last_error",
+  "created_at",
+  "updated_at",
+  "delivered_at",
+  "completed_at",
 ];
 
 const REQUIRED_AGENT_FIELDS = [
@@ -66,9 +80,15 @@ export function migrate(db) {
     throw new Error(`Unsupported parallel-agents state schema version ${version}; this package supports ${STATE_SCHEMA_VERSION}`);
   }
 
-  if (version === 0) {
+  let currentVersion = version;
+  if (currentVersion === 0) {
     db.exec(readFileSync(join(sqlDir, "001_state_schema.sql"), "utf8"));
     db.exec(readFileSync(join(sqlDir, "002_state_indexes.sql"), "utf8"));
+    currentVersion = 1;
+  }
+  if (currentVersion < 2) {
+    db.exec(readFileSync(join(sqlDir, "003_state_v2.sql"), "utf8"));
+    currentVersion = 2;
   }
 }
 
@@ -191,6 +211,78 @@ export function setDefaults(db, { model, thinking }) {
   }
 }
 
+export function enqueueAgentCommand(db, { agentId, commandType, payloadJson }) {
+  const existing = getAgent(db, agentId);
+  if (!existing) throw new Error(`Unknown agent: ${agentId}`);
+  const timestamp = nowIso();
+  const payload = normalizeJsonValue(payloadJson ?? {});
+  return withImmediateTransaction(db, () => {
+    const result = db
+      .prepare(
+        "INSERT INTO agent_commands (agent_id, command_type, payload_json, status, response_json, last_error, created_at, updated_at, delivered_at, completed_at) VALUES (?, ?, ?, 'queued', NULL, NULL, ?, ?, NULL, NULL)",
+      )
+      .run(agentId, commandType, payload, timestamp, timestamp);
+    appendEvent(db, {
+      agentId,
+      eventType: "command_queued",
+      payloadJson: JSON.stringify({ commandId: Number(result.lastInsertRowid), commandType, payload: JSON.parse(payload) }),
+    });
+    return getAgentCommand(db, Number(result.lastInsertRowid));
+  });
+}
+
+export function getAgentCommand(db, commandId) {
+  return db.prepare("SELECT * FROM agent_commands WHERE id = ?").get(commandId) ?? null;
+}
+
+export function listAgentCommands(db, { agentId, status, limit = 50 } = {}) {
+  if (agentId && status) {
+    return db.prepare("SELECT * FROM agent_commands WHERE agent_id = ? AND status = ? ORDER BY id ASC LIMIT ?").all(agentId, status, limit);
+  }
+  if (agentId) {
+    return db.prepare("SELECT * FROM agent_commands WHERE agent_id = ? ORDER BY id DESC LIMIT ?").all(agentId, limit).reverse();
+  }
+  return db.prepare("SELECT * FROM agent_commands ORDER BY id DESC LIMIT ?").all(limit).reverse();
+}
+
+export function claimQueuedAgentCommands(db, { agentId, limit = 10 }) {
+  const timestamp = nowIso();
+  return withImmediateTransaction(db, () => {
+    const rows = db
+      .prepare("SELECT * FROM agent_commands WHERE agent_id = ? AND status = 'queued' ORDER BY id ASC LIMIT ?")
+      .all(agentId, limit);
+    for (const row of rows) {
+      db.prepare("UPDATE agent_commands SET status = 'delivering', updated_at = ?, delivered_at = ? WHERE id = ? AND status = 'queued'").run(
+        timestamp,
+        timestamp,
+        row.id,
+      );
+      row.status = "delivering";
+      row.updated_at = timestamp;
+      row.delivered_at = timestamp;
+    }
+    return rows;
+  });
+}
+
+export function completeAgentCommand(db, { commandId, status, responseJson, lastError }) {
+  if (status !== "succeeded" && status !== "failed" && status !== "canceled") throw new Error(`Invalid command completion status: ${status}`);
+  const existing = getAgentCommand(db, commandId);
+  if (!existing) throw new Error(`Unknown agent command: ${commandId}`);
+  const timestamp = nowIso();
+  return withImmediateTransaction(db, () => {
+    db.prepare(
+      "UPDATE agent_commands SET status = ?, response_json = ?, last_error = ?, updated_at = ?, completed_at = ? WHERE id = ?",
+    ).run(status, responseJson === undefined ? existing.response_json : normalizeJsonValue(responseJson), lastError ?? null, timestamp, timestamp, commandId);
+    appendEvent(db, {
+      agentId: existing.agent_id,
+      eventType: status === "succeeded" ? "command_succeeded" : "command_failed",
+      payloadJson: JSON.stringify({ commandId, commandType: existing.command_type, status, lastError: lastError ?? null }),
+    });
+    return getAgentCommand(db, commandId);
+  });
+}
+
 export function getSettings(db) {
   const rows = db.prepare("SELECT key, value_json, updated_at FROM settings").all();
   const settings = {};
@@ -202,6 +294,14 @@ export function getSettings(db) {
     }
   }
   return settings;
+}
+
+function normalizeJsonValue(value) {
+  if (typeof value === "string") {
+    JSON.parse(value);
+    return value;
+  }
+  return JSON.stringify(value ?? {});
 }
 
 function setSettingRaw(db, key, value, timestamp, overwrite) {

@@ -952,18 +952,18 @@ Objectif : lancer des agents et les observer de manière fiable.
 
 Objectif : piloter les agents après lancement.
 
-1. scripts `stop-parallel-agent.sh` et reprise via `start-parallel-agent.sh --resume-session` ;
-2. tool `control_parallel_agent` avec `stop`, `resume`, `set_defaults`, `refresh`, `mark_done`, `clean` ;
-3. commandes `/agents-stop`, `/agents-resume`, `/agents-defaults`, `/agents-clean` ;
-4. statuts SQLite complets : `starting`, `running`, `waiting`, `stopped`, `crashed`, `done`, `cleaned` ;
-5. gestion simple des erreurs et reprise après crash ;
-6. base `PI_TASKS_DB_PATH` partagée pour les queues de questions ;
-7. intégration `pi-tasks` pour stocker les questions FIFO ;
-8. tool `message_parallel_agent` en modes `steer` et `queue` ;
-9. tool `reply_parallel_question` ;
-10. commandes `/agents-steer` et `/agents-ask` ;
-11. bridge `extension_ui_request` / `extension_ui_response` pour les questions utilisateur ;
-12. overlay TUI simple pour lire le tail et envoyer `steer`/`queue`.
+- [x] scripts `stop-parallel-agent.sh` et reprise via `start-parallel-agent.sh --resume-session` ;
+- [x] tool `control_parallel_agent` avec `stop`, `resume`, `set_defaults`, `refresh`, `mark_done`, `clean` ;
+- [x] commandes `/agents-stop`, `/agents-resume`, `/agents-defaults`, `/agents-clean` ;
+- [x] statuts SQLite complets : `starting`, `running`, `waiting`, `stopped`, `crashed`, `done`, `cleaned` ;
+- [x] gestion simple des erreurs et reprise après crash ;
+- [x] base `PI_TASKS_DB_PATH` partagée pour les queues de questions ;
+- [x] intégration `pi-tasks` pour stocker les questions FIFO ;
+- [x] tool `message_parallel_agent` en modes `steer` et `queue` ;
+- [x] tool `reply_parallel_question` ;
+- [x] commandes `/agents-steer` et `/agents-ask` ;
+- [x] bridge `extension_ui_request` / `extension_ui_response` pour les questions utilisateur ;
+- [x] overlay TUI simple pour lire le tail et envoyer `steer`/`queue`.
 
 ### Version 3 — consultation isolée et UX avancée
 

@@ -1,4 +1,4 @@
-export type PiRpcCommandType = "prompt" | "get_state" | "set_thinking_level" | "steer" | "follow_up" | "abort";
+export type PiRpcCommandType = "prompt" | "get_state" | "set_thinking_level" | "steer" | "follow_up" | "abort" | "extension_ui_response";
 
 export interface PiRpcCommand {
   id?: string;

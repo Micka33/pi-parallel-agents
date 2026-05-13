@@ -1,6 +1,6 @@
 ---
 name: pi-parallel-agents
-description: Use when you should launch, inspect, or coordinate Pi sub-agents
+description: Use when you should launch, inspect, control, message, or coordinate Pi sub-agents with launch_parallel_agents, get_parallel_agents, control_parallel_agent, message_parallel_agent, or reply_parallel_question.
 ---
 
 # pi-parallel-agents
@@ -104,6 +104,50 @@ Fields to watch:
 - `provider`, `model`, `thinking`: confirm inherited or overridden runtime settings.
 - `sessionId`/`sessionFile`: confirms the child Pi session was created.
 - `events`: present when `include` contains `logs`; use it to diagnose startup/API errors.
+- `commands`: present when `include` contains `commands`; use it to verify queued RPC delivery.
+- `queue`: present when `include` contains `queues`; use it to find incoming questions or outgoing durable messages.
+
+## Control and messaging
+
+Use `control_parallel_agent` for lifecycle actions:
+
+```json
+{ "action": "stop", "agentId": "api-review" }
+```
+
+```json
+{ "action": "resume", "agentId": "api-review" }
+```
+
+```json
+{ "action": "clean", "agentId": "api-review", "removeWorktree": true, "force": false }
+```
+
+Safety rules:
+
+- Stop an agent before cleaning it.
+- Do not set `removeWorktree`, `removeBranch`, `removeSession`, or `deleteHistory` unless the user explicitly asked.
+- Use `refresh` when status looks stale; dead running/waiting PIDs are marked `crashed`.
+- Use `set_defaults` only after checking the model/thinking combination with `pi --list-models` when changing explicit defaults.
+
+Use `message_parallel_agent` for parent → child communication:
+
+```json
+{ "agentId": "api-review", "mode": "steer", "message": "Focus on failing tests only." }
+```
+
+```json
+{ "agentId": "api-review", "mode": "queue", "message": "After your current turn, run npm test and summarize failures." }
+```
+
+- `steer` is immediate guidance delivered over RPC when the child supervisor is alive.
+- `queue` persists a durable follow-up in `tasks.sqlite`; it is delivered when the child is alive or resumed.
+
+Use `reply_parallel_question` for child → parent questions:
+
+```json
+{ "agentId": "api-review", "questionId": "question-id", "response": "Use option B and keep public API stable." }
+```
 
 ## Recommended workflow
 

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://micka33.github.io/pi-parallel-agents/queue-message.schema.json",
+  "title": "Parallel Agent Queue Message",
+  "type": "object",
+  "required": ["question_id", "agent_id", "direction", "mode", "status", "message", "created_at", "updated_at"],
+  "properties": {
+    "question_id": { "type": "string" },
+    "agent_id": { "type": "string" },
+    "direction": { "enum": ["incoming", "outgoing"] },
+    "mode": { "enum": ["steer", "queue", "reply"] },
+    "status": { "enum": ["queued", "delivered", "answered", "done", "blocked", "canceled"] },
+    "message": { "type": "string" },
+    "response": { "type": ["string", "null"] },
+    "metadata_json": { "type": ["string", "null"] },
+    "created_at": { "type": "string" },
+    "updated_at": { "type": "string" },
+    "delivered_at": { "type": ["string", "null"] },
+    "answered_at": { "type": ["string", "null"] }
+  },
+  "additionalProperties": true
+}

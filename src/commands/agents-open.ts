@@ -10,7 +10,7 @@ export async function agentsOpenCommand(args: string, ctx: ExtensionCommandConte
     return;
   }
   const repoRoot = resolveRepoRoot(ctx.cwd);
-  const { agents } = getParallelAgents({ agentId, include: ["logs"] }, ctx);
+  const { agents } = getParallelAgents({ agentId, include: ["logs", "commands", "queues"] }, ctx);
   const agent = agents[0];
   if (!agent) {
     ctx.ui.notify(`Unknown parallel agent: ${agentId}`, "warning");

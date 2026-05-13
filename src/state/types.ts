@@ -35,6 +35,41 @@ export interface AgentEventRow {
   created_at: string;
 }
 
+export type AgentCommandStatus = "queued" | "delivering" | "succeeded" | "failed" | "canceled";
+
+export interface AgentCommandRow {
+  id: number;
+  agent_id: string;
+  command_type: string;
+  payload_json: string;
+  status: AgentCommandStatus;
+  response_json: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  delivered_at: string | null;
+  completed_at: string | null;
+}
+
+export type QueueDirection = "incoming" | "outgoing";
+export type QueueMode = "steer" | "queue" | "reply";
+export type QueueStatus = "queued" | "delivered" | "answered" | "done" | "blocked" | "canceled";
+
+export interface QueueQuestionRow {
+  question_id: string;
+  agent_id: string;
+  direction: QueueDirection;
+  mode: QueueMode;
+  status: QueueStatus;
+  message: string;
+  response: string | null;
+  metadata_json: string | null;
+  created_at: string;
+  updated_at: string;
+  delivered_at: string | null;
+  answered_at: string | null;
+}
+
 export interface ParallelAgent {
   agentId: string;
   displayName: string;
@@ -59,6 +94,8 @@ export interface ParallelAgent {
   createdAt: string;
   updatedAt: string;
   events?: AgentEventRow[];
+  commands?: AgentCommandRow[];
+  queue?: QueueQuestionRow[];
 }
 
 export interface ParallelAgentSettings {

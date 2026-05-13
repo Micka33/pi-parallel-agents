@@ -1,7 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { agentsAskCommand } from "./agents-ask.js";
+import { agentsCleanCommand } from "./agents-clean.js";
 import { agentsCommand } from "./agents.js";
+import { agentsDefaultsCommand } from "./agents-defaults.js";
 import { agentsOpenCommand } from "./agents-open.js";
 import { agentsOpenArgumentCompletions } from "./agents-open-completions.js";
+import { agentsResumeCommand } from "./agents-resume.js";
+import { agentsSteerCommand } from "./agents-steer.js";
+import { agentsStopCommand } from "./agents-stop.js";
 import { agentsSummaryCommand } from "./agents-summary.js";
 
 export interface RegisterParallelAgentCommandsOptions {
@@ -23,5 +29,40 @@ export function registerParallelAgentCommands(pi: ExtensionAPI, options: Registe
   pi.registerCommand("agents-summary", {
     description: "Show status and summaries for parallel Pi sub-agents.",
     handler: agentsSummaryCommand,
+  });
+
+  pi.registerCommand("agents-stop", {
+    description: "Stop a running parallel Pi sub-agent: /agents-stop <agent-id>",
+    getArgumentCompletions: (argumentPrefix) => agentsOpenArgumentCompletions(argumentPrefix, options.getRepoRoot?.()),
+    handler: agentsStopCommand,
+  });
+
+  pi.registerCommand("agents-resume", {
+    description: "Resume a stopped/crashed parallel Pi sub-agent: /agents-resume <agent-id>",
+    getArgumentCompletions: (argumentPrefix) => agentsOpenArgumentCompletions(argumentPrefix, options.getRepoRoot?.()),
+    handler: agentsResumeCommand,
+  });
+
+  pi.registerCommand("agents-defaults", {
+    description: "Set parallel-agent defaults: /agents-defaults <model> [thinking]",
+    handler: agentsDefaultsCommand,
+  });
+
+  pi.registerCommand("agents-clean", {
+    description: "Clean a stopped parallel Pi sub-agent: /agents-clean <agent-id> [--worktree] [--branch] [--session] [--force]",
+    getArgumentCompletions: (argumentPrefix) => agentsOpenArgumentCompletions(argumentPrefix, options.getRepoRoot?.()),
+    handler: agentsCleanCommand,
+  });
+
+  pi.registerCommand("agents-steer", {
+    description: "Send immediate steering to a child agent: /agents-steer <agent-id> <message>",
+    getArgumentCompletions: (argumentPrefix) => agentsOpenArgumentCompletions(argumentPrefix, options.getRepoRoot?.()),
+    handler: agentsSteerCommand,
+  });
+
+  pi.registerCommand("agents-ask", {
+    description: "Queue a durable follow-up message for a child agent: /agents-ask <agent-id> <message>",
+    getArgumentCompletions: (argumentPrefix) => agentsOpenArgumentCompletions(argumentPrefix, options.getRepoRoot?.()),
+    handler: agentsAskCommand,
   });
 }

@@ -21,6 +21,29 @@ Pi extension and lifecycle scripts for launching parallel Pi sub-agents.
 - Optional `launch_parallel_agents.repoRoot` lets a parent session launch agents from a nested git repo/workspace
 - `launch_parallel_agents` returns partial results as `{ launched, failed }` so one failed child does not hide other launch attempts
 
+## Version 2 livrables
+
+- Lifecycle control:
+  - `scripts/stop-parallel-agent.sh`
+  - `scripts/clean-parallel-agent.sh`
+  - `scripts/start-parallel-agent.sh --resume-session --agent-id <id>`
+- Tools:
+  - `control_parallel_agent` with `stop`, `resume`, `set_defaults`, `refresh`, `mark_done`, `clean`
+  - `message_parallel_agent` with `mode = "steer" | "queue"`
+  - `reply_parallel_question`
+- Commands:
+  - `/agents-stop <id>`
+  - `/agents-resume <id>`
+  - `/agents-defaults <model> [thinking]`
+  - `/agents-clean <id> [--worktree] [--branch] [--session] [--force]`
+  - `/agents-steer <id> <message>`
+  - `/agents-ask <id> <message>`
+- Durable state:
+  - `state.sqlite` now includes `agent_commands` for supervisor-delivered RPC commands
+  - `tasks.sqlite` includes `parallel_questions` plus `pi-tasks`-compatible `task_lists`/`tasks` rows for durable incoming/outgoing queues
+- Child RPC supervisors poll queued commands and deliver `steer`, `follow_up`, and `extension_ui_response` messages when the child process is alive or resumed.
+- `/agents` and `/agents-open` show queue/command details and actionable command hints.
+
 ## Build and test
 
 ```bash

@@ -1,6 +1,6 @@
-import type { AgentEventRow, AgentStateRow, ParallelAgent } from "./types.js";
+import type { AgentCommandRow, AgentEventRow, AgentStateRow, ParallelAgent, QueueQuestionRow } from "./types.js";
 
-export function toParallelAgent(row: AgentStateRow, events?: AgentEventRow[]): ParallelAgent {
+export function toParallelAgent(row: AgentStateRow, events?: AgentEventRow[], commands?: AgentCommandRow[], queue?: QueueQuestionRow[]): ParallelAgent {
   return {
     agentId: row.agent_id,
     displayName: row.display_name,
@@ -25,6 +25,8 @@ export function toParallelAgent(row: AgentStateRow, events?: AgentEventRow[]): P
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(events ? { events } : {}),
+    ...(commands ? { commands } : {}),
+    ...(queue ? { queue } : {}),
   };
 }
 

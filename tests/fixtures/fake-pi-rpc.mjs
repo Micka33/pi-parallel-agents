@@ -34,6 +34,16 @@ function runRpc() {
       isStreaming = true;
       respond({ id, type: "response", command: "prompt", success: true });
       event({ type: "agent_start" });
+      if (String(command.message ?? "").includes("ASK_UI")) {
+        setTimeout(() => {
+          event({ type: "extension_ui_request", id: "ui-test", method: "input", title: "Need input", prompt: "Need input" });
+        }, 50);
+      }
+      if (String(command.message ?? "").includes("FIRE_AND_FORGET_UI")) {
+        setTimeout(() => {
+          event({ type: "extension_ui_request", id: "fire-and-forget-test", method: "setWidget", widgetKey: "fake", widgetLines: ["ignore me"] });
+        }, 50);
+      }
       setTimeout(() => {
         event({ type: "turn_start", turnIndex: 0, timestamp: Date.now() });
         event({ type: "turn_end", turnIndex: 0, message: { role: "assistant", content: [{ type: "text", text: "fake done" }] }, toolResults: [] });

@@ -3,8 +3,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   appendEvent,
+  claimQueuedAgentCommands,
+  completeAgentCommand,
+  enqueueAgentCommand,
   getSettings,
   initializeState,
+  listAgentCommands,
   listAgents,
   listEvents,
   openStateDb,
@@ -23,6 +27,10 @@ const VALID_ACTIONS = new Set([
   "set-defaults",
   "mark-done",
   "mark-crashed",
+  "enqueue-command",
+  "claim-commands",
+  "complete-command",
+  "list-commands",
   "list",
 ]);
 
@@ -112,12 +120,54 @@ function main() {
           }),
         };
         break;
+      case "enqueue-command":
+        result = {
+          ok: true,
+          action,
+          command: enqueueAgentCommand(db, {
+            agentId: required(options, "agent-id"),
+            commandType: required(options, "command-type"),
+            payloadJson: options["payload-json"] ? normalizeJsonString(String(options["payload-json"])) : {},
+          }),
+        };
+        break;
+      case "claim-commands":
+        result = {
+          ok: true,
+          action,
+          commands: claimQueuedAgentCommands(db, { agentId: required(options, "agent-id"), limit: Number(options.limit ?? 10) }),
+        };
+        break;
+      case "complete-command":
+        result = {
+          ok: true,
+          action,
+          command: completeAgentCommand(db, {
+            commandId: Number(required(options, "command-id")),
+            status: required(options, "status"),
+            responseJson: options["response-json"] ? normalizeJsonString(String(options["response-json"])) : undefined,
+            lastError: optionalString(options, "last-error"),
+          }),
+        };
+        break;
+      case "list-commands":
+        result = {
+          ok: true,
+          action,
+          commands: listAgentCommands(db, {
+            agentId: optionalString(options, "agent-id"),
+            status: optionalString(options, "status"),
+            limit: Number(options.limit ?? 50),
+          }),
+        };
+        break;
       case "list":
         result = {
           ok: true,
           action,
           agents: listAgents(db, { repoRoot: optionalString(options, "repo-root"), agentId: optionalString(options, "agent-id") }),
           events: options.events ? listEvents(db, { agentId: optionalString(options, "agent-id"), limit: Number(options.limit ?? 50) }) : undefined,
+          commands: options.commands ? listAgentCommands(db, { agentId: optionalString(options, "agent-id"), limit: Number(options.limit ?? 50) }) : undefined,
           settings: getSettings(db),
         };
         break;
@@ -180,7 +230,9 @@ function parsePid(value) {
 }
 
 function usage(message) {
-  process.stderr.write(`${message}\n\nUsage:\n  parallel-agent-state.sh init --state-db <path>\n  parallel-agent-state.sh upsert-agent --state-db <path> --agent-json <path-or-json>\n  parallel-agent-state.sh set-status --state-db <path> --agent-id <id> --status <status> [--pid <pid|null>] [--last-error <text>]\n  parallel-agent-state.sh append-event --state-db <path> --agent-id <id> --event-type <type> [--payload-json <json>]\n  parallel-agent-state.sh set-defaults --state-db <path> [--model <model>] [--thinking <level>]\n`);
+  process.stderr.write(`${message}\n\nUsage:\n  parallel-agent-state.sh init --state-db <path>\n  parallel-agent-state.sh upsert-agent --state-db <path> --agent-json <path-or-json>\n  parallel-agent-state.sh set-status --state-db <path> --agent-id <id> --status <status> [--pid <pid|null>] [--last-error <text>]\n  parallel-agent-state.sh append-event --state-db <path> --agent-id <id> --event-type <type> [--payload-json <json>]\n  parallel-agent-state.sh set-defaults --state-db <path> [--model <model>] [--thinking <level>]
+  parallel-agent-state.sh enqueue-command --state-db <path> --agent-id <id> --command-type <type> --payload-json <json>
+  parallel-agent-state.sh complete-command --state-db <path> --command-id <id> --status <succeeded|failed|canceled> [--response-json <json>] [--last-error <text>]\n`);
   process.exit(2);
 }
 

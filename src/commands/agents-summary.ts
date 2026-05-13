@@ -5,6 +5,6 @@ import { renderAgentsSummary } from "../tui/render-agents.js";
 
 export async function agentsSummaryCommand(_args: string, ctx: ExtensionCommandContext): Promise<void> {
   const repoRoot = resolveRepoRoot(ctx.cwd);
-  const { agents } = getParallelAgents({ include: ["status", "summary", "results"] }, ctx);
+  const { agents } = getParallelAgents({ include: ["status", "summary", "results", "queues"] }, ctx);
   ctx.ui.notify(renderAgentsSummary(agents, repoRoot), "info");
 }

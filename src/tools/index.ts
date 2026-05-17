@@ -51,9 +51,9 @@ export function registerParallelAgentTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "control_parallel_agent",
     label: "Control Parallel Agent",
-    description: "Stop, resume, refresh, mark done, clean, or set defaults for persisted parallel agents.",
-    promptSnippet: "Control a parallel Pi sub-agent lifecycle or defaults.",
-    promptGuidelines: ["Use stop before clean; do not remove worktrees, branches, or sessions unless explicitly requested."],
+    description: "Stop, resume, refresh, mark done, clean, retry blocked questions, review results, or set defaults for persisted parallel agents.",
+    promptSnippet: "Control a parallel Pi sub-agent lifecycle, retry a blocked question, or review results.",
+    promptGuidelines: ["Use stop before clean; do not remove worktrees, branches, or sessions unless explicitly requested.", "Use action=retry_question only for blocked outgoing queue/steer questions.", "Use action=review_results before summarizing multiple child outputs."],
     parameters: ControlParallelAgentParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const output = await controlParallelAgent(params as ControlParallelAgentInput, ctx);
@@ -64,9 +64,9 @@ export function registerParallelAgentTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "message_parallel_agent",
     label: "Message Parallel Agent",
-    description: "Send steering or durable queued messages to a parallel child Pi agent.",
-    promptSnippet: "Send a steer or queue message to an existing parallel child agent.",
-    promptGuidelines: ["Use mode=steer for immediate guidance; use mode=queue for durable follow-up work."],
+    description: "Send steering, durable queued messages, or isolated consultations to a parallel child Pi agent.",
+    promptSnippet: "Send a steer, queue, or consult message to an existing parallel child agent.",
+    promptGuidelines: ["Use mode=steer for immediate guidance; use mode=queue for durable follow-up work.", "Use mode=consult only for worktree agents when the question must not pollute the source child context."],
     parameters: MessageParallelAgentParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const output = await messageParallelAgent(params as MessageParallelAgentInput, ctx);

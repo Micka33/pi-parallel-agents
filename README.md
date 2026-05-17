@@ -45,6 +45,20 @@ Pi extension and lifecycle scripts for launching parallel Pi sub-agents.
 - Child RPC supervisors poll queued commands and deliver `steer`, `follow_up`, and `extension_ui_response` messages when the child process is alive or resumed.
 - `/agents` and `/agents-open` show queue/command details and actionable command hints.
 
+## Version 3 livrables
+
+- Isolated consultation:
+  - `message_parallel_agent` now supports `mode = "consult"` for `workspaceMode = "worktree"` agents.
+  - `scripts/consult-subagent-clone.sh` creates a temporary `../pi/consult-*` worktree and cloned session file, runs a read-only Pi RPC with `thinking = xhigh` by default, returns the answer, then removes the temporary session/worktree/branch unless `debug` is set.
+  - `consult` is refused for `workspaceMode = "current"` because the source checkout is shared and cannot guarantee file isolation.
+- Retry/review UX:
+  - `control_parallel_agent` adds `retry_question` for blocked outgoing `steer`/`queue` rows and `review_results` for consolidated summaries, blocked questions, and recommendations.
+  - New commands: `/agents-consult <id> <question>`, `/agents-retry <id> <question-id>`, `/agents-review [id]`.
+  - `/agents` overlay now includes repo/status counts, guardrail warnings, blocked questions, incoming questions awaiting reply, and advanced command hints.
+- Guardrails:
+  - `current/write` remains blocked at launch; use `worktree/write` for modifications or `current/read_only` for analysis.
+  - Consult questions are passed as argv through `spawn`/`execFile`-style APIs with `shell: false`; NUL bytes and oversized prompts are refused.
+
 ## Build and test
 
 ```bash

@@ -45,6 +45,7 @@ if (tests.length === 0) {
 }
 
 console.log(`Running coverage with ${threshold}% thresholds for lines, branches, and functions...`);
+process.env.PI_PARALLEL_AGENTS_COVERAGE = "1";
 run(process.execPath, [
   "--test",
   "--experimental-test-coverage",

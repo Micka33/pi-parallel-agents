@@ -48,7 +48,7 @@ export function resolveAgentOptions(
     throw new Error(`Invalid accessMode for ${spec.name}: ${accessMode}`);
   }
   if (workspaceMode === "current" && accessMode === "write") {
-    throw new Error(`current/write is not enabled in version 1 for agent ${spec.name}; use a worktree or read_only.`);
+    throw new Error(`current/write is blocked by parallel-agents guardrails for agent ${spec.name}; use a worktree or read_only.`);
   }
 
   const provider = spec.provider ?? launch.defaultProvider ?? parentModel.provider;

@@ -27,6 +27,6 @@ test("resolveAgentOptions rejects invalid workspace and access combinations", ()
   );
   assert.throws(
     () => resolveAgentOptions({ name: "child", prompt: "task", workspaceMode: "current", accessMode: "write" }, {}, configuredDefaults),
-    /current\/write is not enabled/,
+    /current\/write is blocked/,
   );
 });

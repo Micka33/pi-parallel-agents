@@ -8,3 +8,7 @@ export async function steerFromOverlay(ctx: ExtensionCommandContext, agentId: st
 export async function queueFromOverlay(ctx: ExtensionCommandContext, agentId: string, message: string): Promise<unknown> {
   return messageParallelAgent({ agentId, mode: "queue", message }, ctx);
 }
+
+export async function consultFromOverlay(ctx: ExtensionCommandContext, agentId: string, message: string): Promise<unknown> {
+  return messageParallelAgent({ agentId, mode: "consult", message }, ctx);
+}

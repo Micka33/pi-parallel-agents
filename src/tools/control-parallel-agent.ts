@@ -3,6 +3,8 @@ import { cleanParallelAgent } from "../lifecycle/clean-agent.js";
 import { refreshParallelAgents } from "../lifecycle/refresh-agents.js";
 import { resumeParallelAgent } from "../lifecycle/resume-agent.js";
 import { runJsonScript } from "../lifecycle/script-runner.js";
+import { retryBlockedQuestion } from "../queues/retry-question.js";
+import { buildResultsReview } from "../review/results-review.js";
 import { stopParallelAgent } from "../lifecycle/stop-agent.js";
 import { updateParallelAgentsWidget } from "../tui/widget.js";
 import { resolveRepoRoot, scriptPath, stateDbPath } from "../util/paths.js";
@@ -56,6 +58,18 @@ export async function controlParallelAgent(params: ControlParallelAgentInput, ct
       if (params.deleteHistory !== undefined) cleanOptions.deleteHistory = params.deleteHistory;
       if (params.force !== undefined) cleanOptions.force = params.force;
       const result = await cleanParallelAgent(repoRoot, agentId, cleanOptions);
+      updateParallelAgentsWidget(ctx, repoRoot);
+      return result;
+    }
+    case "retry_question": {
+      const agentId = requireAgentId(params);
+      if (!params.questionId) throw new Error("retry_question requires questionId");
+      const result = await retryBlockedQuestion(repoRoot, agentId, params.questionId);
+      updateParallelAgentsWidget(ctx, repoRoot);
+      return result;
+    }
+    case "review_results": {
+      const result = buildResultsReview(repoRoot, params.agentId);
       updateParallelAgentsWidget(ctx, repoRoot);
       return result;
     }

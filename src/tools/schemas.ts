@@ -19,9 +19,11 @@ const ControlAction = Type.Union([
   Type.Literal("refresh"),
   Type.Literal("mark_done"),
   Type.Literal("clean"),
+  Type.Literal("retry_question"),
+  Type.Literal("review_results"),
 ]);
 
-const MessageMode = Type.Union([Type.Literal("steer"), Type.Literal("queue")]);
+const MessageMode = Type.Union([Type.Literal("steer"), Type.Literal("queue"), Type.Literal("consult")]);
 const ReplyStatus = Type.Union([Type.Literal("answered"), Type.Literal("done"), Type.Literal("blocked")]);
 
 export const LaunchParallelAgentsParams = Type.Object({
@@ -53,12 +55,13 @@ export const GetParallelAgentsParams = Type.Object({
 export const ControlParallelAgentParams = Type.Object({
   repoRoot: Type.Optional(Type.String({ description: "Git repo/workspace root whose parallel-agent state should be controlled. Defaults to this Pi session workspace." })),
   action: ControlAction,
-  agentId: Type.Optional(Type.String({ description: "Agent id for stop/resume/mark_done/clean." })),
+  agentId: Type.Optional(Type.String({ description: "Agent id for stop/resume/mark_done/clean/retry_question." })),
   model: Type.Optional(Type.String({ description: "Default model for action=set_defaults." })),
   thinking: Type.Optional(Type.String({ description: "Default thinking level for action=set_defaults." })),
   summary: Type.Optional(Type.String({ description: "Summary for action=mark_done." })),
   diffSummary: Type.Optional(Type.String({ description: "Diff summary for action=mark_done." })),
   testsJson: Type.Optional(Type.String({ description: "JSON string with test results for action=mark_done." })),
+  questionId: Type.Optional(Type.String({ description: "Question id for action=retry_question." })),
   removeWorktree: Type.Optional(Type.Boolean({ description: "For clean: remove the agent worktree when safe." })),
   removeBranch: Type.Optional(Type.Boolean({ description: "For clean: remove the agent branch; requires explicit true." })),
   removeSession: Type.Optional(Type.Boolean({ description: "For clean: remove the session file; requires explicit true." })),
@@ -72,6 +75,9 @@ export const MessageParallelAgentParams = Type.Object({
   mode: MessageMode,
   message: Type.String(),
   questionId: Type.Optional(Type.String({ description: "Optional stable id for the durable queue row." })),
+  thinking: Type.Optional(Type.String({ description: "For mode=consult: temporary clone thinking level. Defaults to xhigh." })),
+  timeoutMs: Type.Optional(Type.Number({ description: "For mode=consult: maximum runtime in milliseconds." })),
+  debug: Type.Optional(Type.Boolean({ description: "For mode=consult: keep temporary worktree/session for debugging." })),
 });
 
 export const ReplyParallelQuestionParams = Type.Object({
@@ -107,13 +113,14 @@ export interface GetParallelAgentsInput {
 
 export interface ControlParallelAgentInput {
   repoRoot?: string;
-  action: "stop" | "resume" | "set_defaults" | "refresh" | "mark_done" | "clean";
+  action: "stop" | "resume" | "set_defaults" | "refresh" | "mark_done" | "clean" | "retry_question" | "review_results";
   agentId?: string;
   model?: string;
   thinking?: string;
   summary?: string;
   diffSummary?: string;
   testsJson?: string;
+  questionId?: string;
   removeWorktree?: boolean;
   removeBranch?: boolean;
   removeSession?: boolean;
@@ -124,9 +131,12 @@ export interface ControlParallelAgentInput {
 export interface MessageParallelAgentInput {
   repoRoot?: string;
   agentId: string;
-  mode: "steer" | "queue";
+  mode: "steer" | "queue" | "consult";
   message: string;
   questionId?: string;
+  thinking?: string;
+  timeoutMs?: number;
+  debug?: boolean;
 }
 
 export interface ReplyParallelQuestionInput {

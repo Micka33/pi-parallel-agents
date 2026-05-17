@@ -52,7 +52,7 @@ export interface AgentCommandRow {
 }
 
 export type QueueDirection = "incoming" | "outgoing";
-export type QueueMode = "steer" | "queue" | "reply";
+export type QueueMode = "steer" | "queue" | "reply" | "consult";
 export type QueueStatus = "queued" | "delivered" | "answered" | "done" | "blocked" | "canceled";
 
 export interface QueueQuestionRow {

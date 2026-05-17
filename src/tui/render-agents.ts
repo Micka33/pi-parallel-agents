@@ -4,7 +4,7 @@ import type { ParallelAgent } from "../state/types.js";
 import { renderQueueList } from "./render-queues.js";
 
 export function renderAgentLine(agent: ParallelAgent, repoRoot: string): string {
-  const workspace = agent.workspaceMode === "current" ? "current/read-only" : "worktree";
+  const workspace = `${agent.workspaceMode}/${agent.accessMode}`;
   const modelThinking = `${agent.model ?? "?"}/${agent.thinking ?? "?"}`;
   const cwd = formatPath(agent.cwd, repoRoot);
   const session = agent.sessionId ? `session ${short(agent.sessionId)}` : agent.sessionFile ? "session file" : "no session";
@@ -22,6 +22,7 @@ export function renderAgentDetails(agent: ParallelAgent, repoRoot: string): stri
     `- status: ${agent.status}`,
     `- workspaceMode: ${agent.workspaceMode}`,
     `- accessMode: ${agent.accessMode}`,
+    agent.workspaceMode === "current" ? `- guardrail: shares the parent checkout${agent.accessMode === "write" ? " and may modify it" : "; read-only tools only"}` : undefined,
     `- cwd: ${formatPath(agent.cwd, repoRoot)}`,
     `- worktree: ${agent.worktreePath ? formatPath(agent.worktreePath, repoRoot) : "none"}`,
     `- branch: ${agent.branchName ?? "current checkout"}`,

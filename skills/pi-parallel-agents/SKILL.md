@@ -140,8 +140,27 @@ Use `message_parallel_agent` for parent → child communication:
 { "agentId": "api-review", "mode": "queue", "message": "After your current turn, run npm test and summarize failures." }
 ```
 
+```json
+{ "agentId": "api-review", "mode": "consult", "message": "Independently assess whether this result is safe to merge." }
+```
+
 - `steer` is immediate guidance delivered over RPC when the child supervisor is alive.
 - `queue` persists a durable follow-up in `tasks.sqlite`; it is delivered when the child is alive or resumed.
+- `consult` creates a temporary read-only clone from a worktree agent and returns an answer without sending the question to the source child session. Use it only for `workspaceMode = "worktree"`; it is refused for `current` agents.
+- For consult debugging only, `debug: true` keeps the temporary clone/session. Do not use it unless you need evidence.
+
+Use `control_parallel_agent` to retry blocked questions or review results:
+
+```json
+{ "action": "retry_question", "agentId": "api-review", "questionId": "blocked-question-id" }
+```
+
+```json
+{ "action": "review_results" }
+```
+
+- `retry_question` only applies to blocked outgoing `steer`/`queue` questions.
+- `review_results` returns consolidated summaries, queue blockers, and recommendations before final user reporting.
 
 Use `reply_parallel_question` for child → parent questions:
 
@@ -156,4 +175,6 @@ Use `reply_parallel_question` for child → parent questions:
 3. Launch with short unique `name` values and a clear `parentPrompt`.
 4. Prefer `current/read_only` for quick checks; use `worktree` only for write work in a git repo.
 5. Immediately call `get_parallel_agents` with `include: ["status"]`; add `"logs"` for failures.
-6. Summarize useful child results for the user and ignore stale test/crashed agents unless cleanup is requested.
+6. Use `mode: "consult"` when you need an isolated second opinion from a worktree child without polluting that child's context.
+7. Use `control_parallel_agent action=review_results` before final reporting when several children produced summaries or blocked queues.
+8. Summarize useful child results for the user and ignore stale test/crashed agents unless cleanup is requested.

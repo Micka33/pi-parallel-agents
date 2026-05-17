@@ -969,15 +969,15 @@ Objectif : piloter les agents après lancement.
 
 Objectif : ajouter les capacités avancées sans complexifier le socle.
 
-1. mode `consult` dans `message_parallel_agent` ;
-2. script `consult-subagent-clone.sh` ;
-3. clone temporaire de worktree/session avec `thinking = "xhigh"` ;
-4. refus du consult pour `workspaceMode = "current"` ;
-5. nettoyage automatique des clones temporaires sauf debug ;
-6. overlay TUI complet multi-agents ;
-7. retry explicite des questions bloquées ;
-8. review assistée des résultats ;
-9. durcissement des garde-fous `current/write`.
+1. [x] mode `consult` dans `message_parallel_agent` ;
+2. [x] script `consult-subagent-clone.sh` ;
+3. [x] clone temporaire de worktree/session avec `thinking = "xhigh"` ;
+4. [x] refus du consult pour `workspaceMode = "current"` ;
+5. [x] nettoyage automatique des clones temporaires sauf debug ;
+6. [x] overlay TUI complet multi-agents ;
+7. [x] retry explicite des questions bloquées ;
+8. [x] review assistée des résultats ;
+9. [x] durcissement des garde-fous `current/write`.
 
 ## Décision d’architecture
 

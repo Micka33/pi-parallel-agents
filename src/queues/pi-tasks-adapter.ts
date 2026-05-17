@@ -133,6 +133,22 @@ export class PiTasksQueueAdapter {
     }
   }
 
+  requeueQuestion(questionId: string): QueueQuestionRow | undefined {
+    const db = this.open();
+    try {
+      const timestamp = nowIso();
+      db.prepare("UPDATE parallel_questions SET status = 'queued', response = NULL, delivered_at = NULL, answered_at = NULL, updated_at = ? WHERE question_id = ?").run(
+        timestamp,
+        questionId,
+      );
+      const question = this.getQuestionInDb(db, questionId);
+      if (question) mirrorQuestionToPiTasks(this.dbPath, questionToTaskInput(question));
+      return question;
+    } finally {
+      db.close();
+    }
+  }
+
   private open(): DatabaseSync {
     ensurePiTasksSchema(this.dbPath);
     mkdirSync(dirname(this.dbPath), { recursive: true });
@@ -161,12 +177,50 @@ function ensurePiTasksSchema(dbPath: string): void {
 }
 
 function migrateQueueTables(db: DatabaseSync): void {
+  ensureParallelQuestionsTable(db);
   db.exec(`
-CREATE TABLE IF NOT EXISTS parallel_questions (
+CREATE INDEX IF NOT EXISTS idx_parallel_questions_agent_status ON parallel_questions(agent_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_parallel_questions_direction ON parallel_questions(direction, created_at);
+`);
+}
+
+function ensureParallelQuestionsTable(db: DatabaseSync): void {
+  const existing = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'parallel_questions'").get() as { sql?: string } | undefined;
+  if (!existing) {
+    createParallelQuestionsTable(db, "parallel_questions");
+    return;
+  }
+  if (String(existing.sql ?? "").includes("'consult'")) return;
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec("DROP INDEX IF EXISTS idx_parallel_questions_agent_status");
+    db.exec("DROP INDEX IF EXISTS idx_parallel_questions_direction");
+    createParallelQuestionsTable(db, "parallel_questions_v3");
+    db.exec(`
+INSERT INTO parallel_questions_v3
+  (question_id, agent_id, direction, mode, status, message, response, metadata_json, created_at, updated_at, delivered_at, answered_at)
+SELECT question_id, agent_id, direction, mode, status, message, response, metadata_json, created_at, updated_at, delivered_at, answered_at
+FROM parallel_questions;
+DROP TABLE parallel_questions;
+ALTER TABLE parallel_questions_v3 RENAME TO parallel_questions;
+`);
+    db.exec("COMMIT");
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {}
+    throw error;
+  }
+}
+
+function createParallelQuestionsTable(db: DatabaseSync, tableName: string): void {
+  db.exec(`
+CREATE TABLE ${tableName} (
   question_id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL,
   direction TEXT NOT NULL CHECK (direction IN ('incoming', 'outgoing')),
-  mode TEXT NOT NULL CHECK (mode IN ('steer', 'queue', 'reply')),
+  mode TEXT NOT NULL CHECK (mode IN ('steer', 'queue', 'reply', 'consult')),
   status TEXT NOT NULL CHECK (status IN ('queued', 'delivered', 'answered', 'done', 'blocked', 'canceled')),
   message TEXT NOT NULL,
   response TEXT,
@@ -176,8 +230,6 @@ CREATE TABLE IF NOT EXISTS parallel_questions (
   delivered_at TEXT,
   answered_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_parallel_questions_agent_status ON parallel_questions(agent_id, status, created_at);
-CREATE INDEX IF NOT EXISTS idx_parallel_questions_direction ON parallel_questions(direction, created_at);
 `);
 }
 

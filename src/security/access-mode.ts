@@ -6,6 +6,6 @@ export function defaultAccessMode(workspaceMode: WorkspaceMode): AccessMode {
 
 export function assertAccessModeAllowed(workspaceMode: WorkspaceMode, accessMode: AccessMode): void {
   if (workspaceMode === "current" && accessMode === "write") {
-    throw new Error("current/write requires explicit confirmation and is not available in version 1");
+    throw new Error("current/write is blocked by parallel-agents guardrails; use a worktree or read_only");
   }
 }

@@ -7,13 +7,19 @@ import { RUNTIME_DIR, STATE_DB_FILE, TASKS_DB_FILE } from "../constants.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export function packageRoot(): string {
-  // dist/src/util/paths.js -> dist/src/util -> package root is ../../..
   // src/util/paths.ts through jiti -> package root is ../..
-  const candidates = [resolve(__dirname, "..", "..", ".."), resolve(__dirname, "..", "..")];
+  // dist/src/util/paths.js -> dist/src/util -> package root is ../../..
+  const sourceLayoutRoot = resolve(__dirname, "..", "..");
+  const distLayoutRoot = resolve(__dirname, "..", "..", "..");
+  const candidates = [sourceLayoutRoot, distLayoutRoot];
+  let root = sourceLayoutRoot;
   for (const candidate of candidates) {
-    if (existsSync(join(candidate, "scripts", "start-parallel-agent.sh"))) return candidate;
+    if (existsSync(join(candidate, "scripts", "start-parallel-agent.sh"))) {
+      root = candidate;
+      break;
+    }
   }
-  return resolve(__dirname, "..", "..");
+  return root;
 }
 
 export function scriptPath(name: string): string {
@@ -28,7 +34,7 @@ export function resolveRepoRoot(cwd: string): string {
   const override = process.env.PI_PARALLEL_AGENTS_REPO_ROOT?.trim();
   if (override) return resolve(override);
   try {
-    const output = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+    const output = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
     if (output) return resolve(output);
   } catch {
     // Non-git directories can still use current workspace mode.

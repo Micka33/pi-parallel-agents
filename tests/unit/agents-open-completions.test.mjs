@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentsOpenArgumentCompletions } from "../../dist/src/commands/agents-open-completions.js";
@@ -66,6 +66,34 @@ test("agents-open argument completions suggest matching agent IDs for the curren
   assert.deepEqual(allMatches?.map((item) => item.value), ["api-worker", "ui-reviewer"]);
 
   assert.equal(agentsOpenArgumentCompletions("other", repoRoot), null);
+});
+
+test("agents-open argument completions cover sorting, fallback labels, and catch errors", () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), "pa-completions-branches-"));
+  const db = openStateDb(join(repoRoot, ".pi", "parallel-agents", "state.sqlite"));
+  try {
+    initializeState(db);
+    upsertAgent(db, createAgent(repoRoot, { agent_id: "zzz", display_name: "zzz", status: "waiting", workspace_mode: "worktree", model: null, thinking: null }));
+    upsertAgent(db, createAgent(repoRoot, { agent_id: "aaa", display_name: "aaa", status: "waiting", workspace_mode: "worktree", model: null, thinking: null }));
+    db.prepare("UPDATE agents SET updated_at = ? WHERE agent_id = ?").run("2026-01-01T00:00:00.000Z", "zzz");
+    db.prepare("UPDATE agents SET updated_at = ? WHERE agent_id = ?").run("2026-01-01T00:00:00.000Z", "aaa");
+  } finally {
+    db.close();
+  }
+
+  const matches = agentsOpenArgumentCompletions("waiting worktree", repoRoot);
+  assert.deepEqual(matches?.map((item) => item.value), ["aaa", "zzz"]);
+  assert.equal(matches?.[0]?.label, "aaa");
+  assert.match(matches?.[0]?.description ?? "", /worktree · \?\/\?/);
+
+  const brokenRepoRoot = mkdtempSync(join(tmpdir(), "pa-completions-broken-"));
+  writeFileSync(join(brokenRepoRoot, ".broken-state"), "not a sqlite db");
+  process.env.PI_PARALLEL_AGENTS_DB_PATH = ".broken-state";
+  try {
+    assert.equal(agentsOpenArgumentCompletions("anything", brokenRepoRoot), null);
+  } finally {
+    delete process.env.PI_PARALLEL_AGENTS_DB_PATH;
+  }
 });
 
 test("agents-open argument completions are quiet when state is unavailable", () => {

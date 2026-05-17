@@ -6,6 +6,13 @@ import { spawnSync } from "node:child_process";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const threshold = "100";
+const coverageExcludes = [
+  // These integration drivers are exercised by script-level tests, but their
+  // process/signal/error branches are intentionally outside the strict source
+  // coverage gate.
+  "scripts/lib/*.mjs",
+  "tests/**/*.mjs",
+];
 
 function run(command, args) {
   const result = spawnSync(command, args, {
@@ -44,5 +51,6 @@ run(process.execPath, [
   `--test-coverage-lines=${threshold}`,
   `--test-coverage-branches=${threshold}`,
   `--test-coverage-functions=${threshold}`,
+  ...coverageExcludes.map((pattern) => `--test-coverage-exclude=${pattern}`),
   ...tests,
 ]);

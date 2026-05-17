@@ -1,7 +1,10 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { PiTasks } from "@micka33/pi-tasks";
 import type { QueueDirection, QueueMode, QueueQuestionRow, QueueStatus } from "../state/types.js";
+
+const MIRROR_OWNER_AGENT_ID = "pi-parallel-agents";
 
 export interface CreateQuestionInput {
   questionId: string;
@@ -50,18 +53,10 @@ export class PiTasksQueueAdapter {
            metadata_json = COALESCE(excluded.metadata_json, parallel_questions.metadata_json),
            updated_at = excluded.updated_at`,
       ).run(input.questionId, input.agentId, input.direction, input.mode, status, input.message, input.response ?? null, metadataJson, timestamp, timestamp);
-      upsertPiTask(db, {
-        questionId: input.questionId,
-        agentId: input.agentId,
-        direction: input.direction,
-        mode: input.mode,
-        status,
-        message: input.message,
-        response: input.response ?? null,
-        metadataJson,
-        timestamp,
-      });
-      return this.mustGetQuestion(db, input.questionId);
+
+      const question = this.mustGetQuestion(db, input.questionId);
+      mirrorQuestionToPiTasks(this.dbPath, questionToTaskInput(question));
+      return question;
     } finally {
       db.close();
     }
@@ -112,7 +107,7 @@ export class PiTasksQueueAdapter {
         questionId,
       );
       const question = this.getQuestionInDb(db, questionId);
-      if (question) upsertPiTask(db, { ...questionToTaskInput(question), timestamp });
+      if (question) mirrorQuestionToPiTasks(this.dbPath, questionToTaskInput(question));
       return question;
     } finally {
       db.close();
@@ -131,7 +126,7 @@ export class PiTasksQueueAdapter {
         questionId,
       );
       const question = this.getQuestionInDb(db, questionId);
-      if (question) upsertPiTask(db, { ...questionToTaskInput(question), timestamp });
+      if (question) mirrorQuestionToPiTasks(this.dbPath, questionToTaskInput(question));
       return question;
     } finally {
       db.close();
@@ -139,12 +134,13 @@ export class PiTasksQueueAdapter {
   }
 
   private open(): DatabaseSync {
+    ensurePiTasksSchema(this.dbPath);
     mkdirSync(dirname(this.dbPath), { recursive: true });
     const db = new DatabaseSync(this.dbPath);
     db.exec("PRAGMA foreign_keys = ON");
     db.exec("PRAGMA busy_timeout = 5000");
     db.exec("PRAGMA journal_mode = WAL");
-    migrate(db);
+    migrateQueueTables(db);
     return db;
   }
 
@@ -159,57 +155,13 @@ export class PiTasksQueueAdapter {
   }
 }
 
-function migrate(db: DatabaseSync): void {
+function ensurePiTasksSchema(dbPath: string): void {
+  const tasks = new PiTasks({ dbPath, agentId: MIRROR_OWNER_AGENT_ID, source: "unknown" });
+  tasks.close();
+}
+
+function migrateQueueTables(db: DatabaseSync): void {
   db.exec(`
-CREATE TABLE IF NOT EXISTS task_lists (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  scope_type TEXT NOT NULL CHECK (scope_type IN ('workspace', 'thread', 'agent', 'global', 'custom')),
-  scope_key TEXT NOT NULL,
-  visibility TEXT NOT NULL CHECK (visibility IN ('private', 'shared')),
-  owner_agent_id TEXT,
-  created_by_agent_id TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  deleted_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS tasks (
-  id TEXT PRIMARY KEY,
-  list_id TEXT NOT NULL REFERENCES task_lists(id),
-  position INTEGER NOT NULL,
-  title TEXT NOT NULL,
-  description TEXT,
-  notes TEXT,
-  status TEXT NOT NULL CHECK (status IN ('todo', 'in_progress', 'blocked', 'done', 'canceled')),
-  assigned_to_agent_id TEXT,
-  claimed_by_agent_id TEXT,
-  claim_expires_at TEXT,
-  outcome TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  started_at TEXT,
-  completed_at TEXT,
-  deleted_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS private_access_events (
-  id TEXT PRIMARY KEY,
-  list_id TEXT NOT NULL REFERENCES task_lists(id),
-  actor_agent_id TEXT NOT NULL,
-  tool_name TEXT NOT NULL,
-  reason TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_task_lists_scope ON task_lists(scope_type, scope_key, visibility);
-CREATE INDEX IF NOT EXISTS idx_task_lists_deleted ON task_lists(deleted_at);
-CREATE INDEX IF NOT EXISTS idx_tasks_list_position ON tasks(list_id, position);
-CREATE INDEX IF NOT EXISTS idx_tasks_claim ON tasks(status, claim_expires_at);
-CREATE INDEX IF NOT EXISTS idx_tasks_assignment ON tasks(list_id, assigned_to_agent_id, status);
-CREATE INDEX IF NOT EXISTS idx_tasks_deleted ON tasks(deleted_at);
-CREATE INDEX IF NOT EXISTS idx_private_access_events_list ON private_access_events(list_id, created_at);
-
 CREATE TABLE IF NOT EXISTS parallel_questions (
   question_id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL,
@@ -238,57 +190,51 @@ interface PiTaskInput {
   message: string;
   response: string | null;
   metadataJson: string | null;
-  timestamp?: string;
 }
 
-function upsertPiTask(db: DatabaseSync, input: PiTaskInput): void {
-  const timestamp = input.timestamp ?? nowIso();
-  const listId = listIdForAgent(input.agentId);
-  db.prepare(
-    "INSERT INTO task_lists (id, name, scope_type, scope_key, visibility, owner_agent_id, created_by_agent_id, created_at, updated_at, deleted_at) VALUES (?, ?, 'agent', ?, 'shared', ?, 'pi-parallel-agents', ?, ?, NULL) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, deleted_at = NULL",
-  ).run(listId, `parallel questions: ${input.agentId}`, input.agentId, input.agentId, timestamp, timestamp);
-  const existing = db.prepare("SELECT id FROM tasks WHERE id = ?").get(input.questionId);
-  const position = existing ? null : nextTaskPosition(db, listId);
-  const title = `[${input.direction}/${input.mode}] ${truncate(input.message, 160)}`;
-  const notes = JSON.stringify({
-    parallelQuestionId: input.questionId,
-    direction: input.direction,
-    mode: input.mode,
-    status: input.status,
-    response: input.response,
-    metadata: parseMetadata(input.metadataJson),
-  });
-  const taskStatus = taskStatusForQueueStatus(input.status);
-  const outcome = taskStatus === "done" ? input.response ?? `parallel question ${input.status}` : null;
-  if (existing) {
-    db.prepare("UPDATE tasks SET title = ?, notes = ?, status = ?, outcome = ?, updated_at = ?, completed_at = CASE WHEN ? = 'done' THEN COALESCE(completed_at, ?) ELSE completed_at END WHERE id = ?").run(
-      title,
-      notes,
-      taskStatus,
-      outcome,
-      timestamp,
-      taskStatus,
-      timestamp,
-      input.questionId,
+type MirroredTaskStatus = "todo" | "blocked" | "done" | "canceled";
+
+function mirrorQuestionToPiTasks(dbPath: string, input: PiTaskInput): void {
+  const tasks = new PiTasks({ dbPath, agentId: MIRROR_OWNER_AGENT_ID, source: "unknown" });
+  try {
+    const listId = listIdForAgent(input.agentId);
+    const assignedAgentId = `parallel-child:${input.agentId}`;
+    const taskStatus = taskStatusForQueueStatus(input.status);
+    const outcome = outcomeForTaskStatus(taskStatus, input);
+
+    const list = tasks.ensureTaskList({
+      id: listId,
+      name: `parallel questions: ${input.agentId}`,
+      scope_type: "agent",
+      scope_key: input.agentId,
+      visibility: "shared",
+      owner_agent_id: input.agentId,
+      update_existing: true,
+    });
+
+    tasks.upsertTask(
+      {
+        id: input.questionId,
+        list_id: list.id,
+        title: `[${input.direction}/${input.mode}] ${truncate(input.message, 160)}`,
+        description: input.message,
+        notes: JSON.stringify({
+          parallelQuestionId: input.questionId,
+          direction: input.direction,
+          mode: input.mode,
+          status: input.status,
+          response: input.response,
+          metadata: parseMetadata(input.metadataJson),
+        }),
+        status: taskStatus,
+        assigned_to_agent_id: assignedAgentId,
+        outcome,
+      },
+      { agentId: assignedAgentId, source: "unknown" },
     );
-    return;
+  } finally {
+    tasks.close();
   }
-  db.prepare(
-    "INSERT INTO tasks (id, list_id, position, title, description, notes, status, assigned_to_agent_id, claimed_by_agent_id, claim_expires_at, outcome, created_at, updated_at, started_at, completed_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, NULL, ?, NULL)",
-  ).run(
-    input.questionId,
-    listId,
-    position,
-    title,
-    input.message,
-    notes,
-    taskStatus,
-    `parallel-child:${input.agentId}`,
-    outcome,
-    timestamp,
-    timestamp,
-    taskStatus === "done" ? timestamp : null,
-  );
 }
 
 function questionToTaskInput(question: QueueQuestionRow): PiTaskInput {
@@ -308,16 +254,16 @@ function listIdForAgent(agentId: string): string {
   return `parallel-agent-${agentId.replace(/[^a-zA-Z0-9._:-]+/g, "-")}-questions`;
 }
 
-function nextTaskPosition(db: DatabaseSync, listId: string): number {
-  const row = db.prepare("SELECT COALESCE(MAX(position), 0) + 1 AS position FROM tasks WHERE list_id = ?").get(listId) as { position?: number } | undefined;
-  return Number(row?.position ?? 1);
-}
-
-function taskStatusForQueueStatus(status: QueueStatus): "todo" | "blocked" | "done" | "canceled" {
+function taskStatusForQueueStatus(status: QueueStatus): MirroredTaskStatus {
   if (status === "answered" || status === "done") return "done";
   if (status === "blocked") return "blocked";
   if (status === "canceled") return "canceled";
   return "todo";
+}
+
+function outcomeForTaskStatus(status: MirroredTaskStatus, input: PiTaskInput): string | null {
+  if (status !== "done" && status !== "canceled") return null;
+  return input.response?.trim() ? input.response : `parallel question ${input.status}`;
 }
 
 function parseMetadata(json: string | null): unknown {

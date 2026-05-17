@@ -40,7 +40,8 @@ Pi extension and lifecycle scripts for launching parallel Pi sub-agents.
   - `/agents-ask <id> <message>`
 - Durable state:
   - `state.sqlite` now includes `agent_commands` for supervisor-delivered RPC commands
-  - `tasks.sqlite` includes `parallel_questions` plus `pi-tasks`-compatible `task_lists`/`tasks` rows for durable incoming/outgoing queues
+  - `tasks.sqlite` includes `parallel_questions`; queue state is mirrored into pi-tasks lists/tasks through `@micka33/pi-tasks`
+  - By default this database remains `<repoRoot>/.pi/parallel-agents/tasks.sqlite`; set `PI_TASKS_DB_PATH` to share a database with a separately installed pi-tasks extension
 - Child RPC supervisors poll queued commands and deliver `steer`, `follow_up`, and `extension_ui_response` messages when the child process is alive or resumed.
 - `/agents` and `/agents-open` show queue/command details and actionable command hints.
 

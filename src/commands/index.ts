@@ -11,6 +11,7 @@ import { agentsRetryCommand } from "./agents-retry.js";
 import { agentsReviewCommand } from "./agents-review.js";
 import { agentsSteerCommand } from "./agents-steer.js";
 import { agentsStopCommand } from "./agents-stop.js";
+import { agentsSummaryArgumentCompletions } from "./agents-summary-completions.js";
 import { agentsSummaryCommand } from "./agents-summary.js";
 
 export interface RegisterParallelAgentCommandsOptions {
@@ -30,7 +31,8 @@ export function registerParallelAgentCommands(pi: ExtensionAPI, options: Registe
   });
 
   pi.registerCommand("agents-summary", {
-    description: "Show status and summaries for parallel Pi sub-agents.",
+    description: "Show status and summaries for non-cleaned parallel Pi sub-agents: /agents-summary [--all|--include-cleaned]",
+    getArgumentCompletions: agentsSummaryArgumentCompletions,
     handler: agentsSummaryCommand,
   });
 

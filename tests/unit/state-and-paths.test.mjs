@@ -6,6 +6,9 @@ import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { statusGlyph, toParallelAgent } from "../../dist/src/state/selectors.js";
 import { StateReader } from "../../dist/src/state/state-reader.js";
+import { renderAgentDetails, renderAgentLine, renderAgentsList, renderAgentsSummary } from "../../dist/src/tui/render-agents.js";
+import { renderQueueLine, renderQueueList } from "../../dist/src/tui/render-queues.js";
+import { updateParallelAgentsWidget } from "../../dist/src/tui/widget.js";
 import { packageRoot, promptPath, resolveRepoRoot, runtimeDir, scriptPath, stateDbPath, tasksDbPath } from "../../dist/src/util/paths.js";
 import { appendEvent, enqueueAgentCommand, initializeState, openStateDb, setDefaults, upsertAgent } from "../../scripts/lib/state-db.mjs";
 
@@ -41,6 +44,34 @@ function insertAgent(db, repoRoot, agentId, overrides = {}) {
     thinking: "high",
     ...overrides,
   });
+}
+
+function agent(overrides = {}) {
+  return {
+    agentId: "agent",
+    displayName: "Agent",
+    parentSessionId: "parent",
+    repoRoot: "/repo",
+    status: "waiting",
+    workspaceMode: "current",
+    accessMode: "read_only",
+    pid: null,
+    cwd: "/repo",
+    worktreePath: null,
+    branchName: null,
+    provider: "provider",
+    model: "model",
+    thinking: "high",
+    sessionId: null,
+    sessionFile: null,
+    summary: null,
+    diffSummary: null,
+    testsJson: null,
+    lastError: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:01.000Z",
+    ...overrides,
+  };
 }
 
 test("selectors map rows, optional collections, and all status glyphs", () => {
@@ -107,6 +138,117 @@ test("selectors map rows, optional collections, and all status glyphs", () => {
   );
 });
 
+test("TUI renderers cover agent lines, details, summaries, and queues", () => {
+  const base = agent({ sessionId: "session-id-longer-than-short", summary: "summary" });
+  const worktree = agent({
+    agentId: "worktree-agent",
+    displayName: "Worktree Agent",
+    status: "done",
+    workspaceMode: "worktree",
+    accessMode: "write",
+    pid: 123,
+    cwd: "/repo/worktrees/agent",
+    worktreePath: "/repo/worktrees/agent",
+    branchName: "agent-branch",
+    model: null,
+    thinking: null,
+    sessionId: null,
+    sessionFile: "/sessions/agent.jsonl",
+    lastError: "boom",
+    commands: [
+      { id: 1, command_type: "steer", status: "succeeded", last_error: null },
+      { id: 2, command_type: "queue", status: "failed", last_error: "blocked" },
+    ],
+    queue: [
+      {
+        question_id: "q1",
+        agent_id: "worktree-agent",
+        direction: "incoming",
+        mode: "reply",
+        status: "queued",
+        message: "short message",
+        response: "short response",
+        metadata_json: null,
+        created_at: "now",
+        updated_at: "now",
+        delivered_at: null,
+        answered_at: null,
+      },
+    ],
+    events: Array.from({ length: 9 }, (_, index) => ({
+      id: index + 1,
+      agent_id: "worktree-agent",
+      event_type: `event-${index}`,
+      payload_json: index === 8 ? null : "x".repeat(130),
+      created_at: "now",
+    })),
+  });
+  const currentWrite = agent({ accessMode: "write", sessionId: "short" });
+  const outside = agent({ cwd: "/outside/agent" });
+
+  assert.match(renderAgentLine(base, "/repo"), /session session-id-/);
+  assert.match(renderAgentLine(currentWrite, "/repo"), /session short/);
+  assert.match(renderAgentLine(worktree, "/repo"), /worktrees\/agent · session file/);
+  assert.match(renderAgentLine(outside, "/repo"), /\/outside\/agent · no session/);
+  assert.equal(renderAgentsList([], "/repo"), "No parallel agents recorded for this repo.");
+  assert.match(renderAgentsList([base], "/repo"), /Agent/);
+
+  const details = renderAgentDetails(worktree, "/repo");
+  assert.match(details, /- worktree: worktrees\/agent/);
+  assert.match(details, /- branch: agent-branch/);
+  assert.match(details, /- model\/thinking: \?\/\?/);
+  assert.match(details, /- pid: 123/);
+  assert.match(details, /- lastError: boom/);
+  assert.match(details, /#1 steer\/succeeded/);
+  assert.match(details, /#2 queue\/failed: blocked/);
+  assert.match(details, /← q1 reply\/queued: short message · response: short response/);
+  assert.match(details, /event-8/);
+  assert.match(renderAgentDetails(currentWrite, "/repo"), /shares the parent checkout and may modify it/);
+  assert.match(renderAgentDetails(base, "/repo"), /shares the parent checkout; read-only tools only/);
+  assert.match(renderAgentDetails(agent({ queue: [] }), "/repo"), /No queued questions/);
+
+  assert.equal(renderAgentsSummary([], "/repo"), "No parallel agents recorded for this repo.");
+  assert.match(renderAgentsSummary([base, agent({ summary: null })], "/repo"), /summary/);
+
+  assert.match(
+    renderQueueLine({
+      question_id: "q2",
+      agent_id: "agent",
+      direction: "outgoing",
+      mode: "queue",
+      status: "blocked",
+      message: "m".repeat(130),
+      response: "r".repeat(90),
+      metadata_json: null,
+      created_at: "now",
+      updated_at: "now",
+      delivered_at: null,
+      answered_at: null,
+    }),
+    /→ q2 queue\/blocked: m+… · response: r+…/,
+  );
+  assert.match(
+    renderQueueLine({
+      question_id: "q3",
+      agent_id: "agent",
+      direction: "incoming",
+      mode: "reply",
+      status: "done",
+      message: "no response",
+      response: null,
+      metadata_json: null,
+      created_at: "now",
+      updated_at: "now",
+      delivered_at: null,
+      answered_at: null,
+    }),
+    /← q3 reply\/done: no response$/,
+  );
+  assert.equal(renderQueueList(undefined), "No queued questions.");
+  assert.equal(renderQueueList([]), "No queued questions.");
+  assert.match(renderQueueList(worktree.queue), /q1/);
+});
+
 test("StateReader covers missing and populated state reads", () => {
   const missingReader = new StateReader(join(tempDir("pa-reader-missing-"), "missing.sqlite"));
   assert.equal(missingReader.exists(), false);
@@ -140,6 +282,41 @@ test("StateReader covers missing and populated state reads", () => {
   assert.deepEqual(reader.readEvents("first", 4).map((row) => row.event_type), ["older", "newer", "command_queued", "command_queued"]);
   assert.equal(reader.readSettings().default_model, "configured");
   assert.equal(reader.readSettings().raw, "not-json");
+});
+
+test("widget omits cleaned agents and clears when no visible agents remain", () => {
+  const { repoRoot, db } = createStateDb();
+  try {
+    insertAgent(db, repoRoot, "hidden-cleaned", { status: "cleaned" });
+    insertAgent(db, repoRoot, "visible-waiting", { status: "waiting" });
+  } finally {
+    db.close();
+  }
+
+  const widgets = [];
+  const ctx = {
+    cwd: repoRoot,
+    ui: {
+      setWidget(key, value) {
+        widgets.push({ key, value });
+      },
+    },
+  };
+
+  updateParallelAgentsWidget(ctx, repoRoot);
+  assert.equal(widgets.length, 1);
+  assert.equal(widgets[0].key, "parallel-agents");
+  assert.ok(widgets[0].value.some((line) => line.includes("visible-waiting")));
+  assert.ok(widgets[0].value.every((line) => !line.includes("hidden-cleaned")));
+
+  const { repoRoot: cleanedOnlyRoot, db: cleanedOnlyDb } = createStateDb();
+  try {
+    insertAgent(cleanedOnlyDb, cleanedOnlyRoot, "only-cleaned", { status: "cleaned" });
+  } finally {
+    cleanedOnlyDb.close();
+  }
+  updateParallelAgentsWidget(ctx, cleanedOnlyRoot);
+  assert.deepEqual(widgets.at(-1), { key: "parallel-agents", value: undefined });
 });
 
 test("path helpers resolve package, runtime, database, and repository paths", () => {

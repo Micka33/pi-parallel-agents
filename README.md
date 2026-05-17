@@ -6,7 +6,7 @@ Pi extension and lifecycle scripts for launching parallel Pi sub-agents.
 
 - Pi extension entrypoint: `src/parallel-agents.ts`
 - Tools: `launch_parallel_agents`, `get_parallel_agents`
-- Commands: `/agents`, `/agents-open <id>`, `/agents-summary` (`/agents-open` autocompletes known agent IDs in the Pi UI)
+- Commands: `/agents`, `/agents-open <id>`, `/agents-summary [--all|--include-cleaned]` (`/agents-open` autocompletes known agent IDs; `/agents-summary` autocompletes its flags)
 - Skill: `skills/pi-parallel-agents/SKILL.md` documents `launch_parallel_agents`, `get_parallel_agents`, defaults, model selection, and Pi thinking levels
 - Minimal widget above the editor with status, workspace, model/thinking, cwd and session
 - SQLite state store: `<repoRoot>/.pi/parallel-agents/state.sqlite`

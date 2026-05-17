@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentsOpenArgumentCompletions } from "../../dist/src/commands/agents-open-completions.js";
+import { agentsSummaryArgumentCompletions } from "../../dist/src/commands/agents-summary-completions.js";
 import { openStateDb, initializeState, upsertAgent } from "../../scripts/lib/state-db.mjs";
 
 function createAgent(repoRoot, overrides) {
@@ -100,4 +101,13 @@ test("agents-open argument completions are quiet when state is unavailable", () 
   const repoRoot = mkdtempSync(join(tmpdir(), "pa-completions-empty-"));
   assert.equal(agentsOpenArgumentCompletions("anything", repoRoot), null);
   assert.equal(agentsOpenArgumentCompletions("anything", undefined), null);
+});
+
+test("agents-summary argument completions suggest include-cleaned flags", () => {
+  assert.deepEqual(agentsSummaryArgumentCompletions("")?.map((item) => item.value), ["--all", "--include-cleaned"]);
+  assert.deepEqual(agentsSummaryArgumentCompletions(" ")?.map((item) => item.value), ["--all", "--include-cleaned"]);
+  assert.deepEqual(agentsSummaryArgumentCompletions("--i")?.map((item) => item.value), ["--include-cleaned"]);
+  assert.equal(agentsSummaryArgumentCompletions("--all "), null);
+  assert.equal(agentsSummaryArgumentCompletions("agent-id"), null);
+  assert.equal(agentsSummaryArgumentCompletions("--missing"), null);
 });

@@ -7,7 +7,10 @@ import { renderAgentLine } from "./render-agents.js";
 
 export function updateParallelAgentsWidget(ctx: ExtensionContext, repoRoot = resolveRepoRoot(ctx.cwd)): void {
   const reader = new StateReader(stateDbPath(repoRoot));
-  const agents = reader.readAgents({ repoRoot }).map((row) => toParallelAgent(row));
+  const agents = reader
+    .readAgents({ repoRoot })
+    .map((row) => toParallelAgent(row))
+    .filter((agent) => agent.status !== "cleaned");
   if (agents.length === 0) {
     ctx.ui.setWidget(WIDGET_KEY, undefined);
     return;

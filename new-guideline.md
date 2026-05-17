@@ -59,7 +59,7 @@ Instead, create child agents with the SDK:
 
 Use a small Node SDK worker process for every persistent, resumable, or long-lived child agent. The worker imports `@earendil-works/pi-coding-agent` and uses the SDK directly; it must not spawn the `pi` CLI. The worker communicates with the supervisor/requesting agent over a small internal IPC protocol and preserves the current durable state/queue behavior.
 
-Use pure in-process `AgentSession` objects only for `singleResponse`, disposable, or otherwise non-durable children. Persistent and resumable children must run in a supervisor/worker process so they can outlive the launching tool call and be stopped/resumed cleanly.
+Use pure in-process `AgentSession` objects only for the narrow inline case where all of these are true: `dedicatedWorktree = false`, `readOnly = true`, `singleResponse = true`, and `maxSubAgents = 0`. Every other child must run in a Node SDK supervisor/worker process, including any child with a dedicated worktree, write access, persistence/resume behavior, or permission to launch sub-agents.
 
 ## 3. SessionManager rules for context inheritance
 
@@ -124,7 +124,7 @@ When `singleResponse = true`:
 - automatically clean temporary session files, worktree, and branch unless a debug/keep option is explicitly set;
 - do not leave a running child agent behind.
 
-Use `createAgentSession()` directly for `singleResponse` and subscribe to events. Do not use `runPrintMode()`. The extension needs explicit event handling, final-answer extraction, state updates, queue integration, abort handling, and deterministic cleanup timing; `runPrintMode()` is too high-level and CLI-oriented for that.
+For the narrow inline `singleResponse` case (`dedicatedWorktree = false`, `readOnly = true`, `maxSubAgents = 0`), use `createAgentSession()` directly and subscribe to events. Do not use `runPrintMode()`. For any other `singleResponse` child, run the same SDK logic inside the Node worker. The extension needs explicit event handling, final-answer extraction, state updates, queue integration, abort handling, and deterministic cleanup timing; `runPrintMode()` is too high-level and CLI-oriented for that.
 
 `singleResponse` replaces the old “consult clone” concept.
 
@@ -170,9 +170,19 @@ Recommended migration shape:
 - Replace public `launch_parallel_agents` / consult-oriented semantics with `start_agent` plus options.
 - Remove public `consult` mode; model it as `singleResponse + readOnly + dedicatedWorktree`.
 - Replace `scripts/lib/consult-agent.mjs` and `scripts/consult-subagent-clone.sh` with the `singleResponse` code path.
-- Replace the `pi --mode rpc` child process in `scripts/lib/start-agent.mjs` with either:
-  - an in-process SDK runner for disposable children; or
-  - a Node SDK worker process for durable children.
+- Replace the `pi --mode rpc` child process in `scripts/lib/start-agent.mjs` with a dispatcher:
+  - inline path: call an in-process SDK runner only when `dedicatedWorktree = false`, `readOnly = true`, `singleResponse = true`, and `maxSubAgents = 0`;
+  - worker path: start a Node SDK worker process for every other case.
+- The inline runner should be a small library function in the extension process, not another script that spawns Pi. It should:
+  - create a temporary `AgentSession` with `createAgentSession()`;
+  - use `SessionManager.inMemory(requesterCwd)` unless a debug/audit option explicitly asks for a temporary session file;
+  - build a read-only tool list from the inherited/allowed tools;
+  - optionally clone safe requester context when `inheritContext = true`;
+  - send exactly one `session.prompt(childPrompt)`;
+  - collect the final answer from SDK events / `session.messages`;
+  - call `session.dispose()` in `finally`;
+  - return the answer directly to the requester;
+  - create no durable child agent, no worktree, no resumable session, and no child that can later be stopped, resumed, messaged, or cleaned.
 - Keep git worktree creation/cleanup logic, but decouple it from Pi CLI startup.
 - Keep SQLite state, queues, cleanup, stop, resume, and review features, but drive them from SDK events instead of RPC stdout.
 

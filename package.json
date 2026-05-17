@@ -24,7 +24,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/**/*.test.mjs",
-    "ci": "npm run typecheck && node --test tests/**/*.test.mjs"
+    "coverage": "node scripts/check-coverage.mjs",
+    "ci": "npm run typecheck && node scripts/check-coverage.mjs"
   },
   "dependencies": {
     "@micka33/pi-tasks": "^1.2.0"

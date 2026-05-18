@@ -26,8 +26,8 @@ test("parallel-agent-state.sh initializes schema and writes agent state", () => 
       display_name: "api",
       repo_root: dir,
       status: "starting",
-      workspace_mode: "current",
-      access_mode: "read_only",
+      dedicated_worktree: 0,
+      read_only: 1,
       cwd: dir,
       model: "gpt-5.5",
       thinking: "high",
@@ -59,4 +59,20 @@ test("parallel-agent-state.sh initializes schema and writes agent state", () => 
   } finally {
     db.close();
   }
+});
+
+test("parallel-agent-state.sh rejects non-current development schemas", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pa-state-unsupported-"));
+  const dbPath = join(dir, "state.sqlite");
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec("CREATE TABLE old_agents (agent_id TEXT PRIMARY KEY); PRAGMA user_version = 2;");
+  } finally {
+    db.close();
+  }
+
+  assert.throws(
+    () => execFileSync(stateScript, ["init", "--state-db", dbPath], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
+    /delete state\.sqlite for a clean development install/,
+  );
 });

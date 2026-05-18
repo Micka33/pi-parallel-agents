@@ -7,8 +7,6 @@ export function toParallelAgent(row: AgentStateRow, events?: AgentEventRow[], co
     parentSessionId: row.parent_session_id,
     repoRoot: row.repo_root,
     status: row.status,
-    workspaceMode: row.workspace_mode,
-    accessMode: row.access_mode,
     pid: row.pid,
     cwd: row.cwd,
     worktreePath: row.worktree_path,
@@ -22,12 +20,30 @@ export function toParallelAgent(row: AgentStateRow, events?: AgentEventRow[], co
     diffSummary: row.diff_summary,
     testsJson: row.tests_json,
     lastError: row.last_error,
+    requesterAgentId: row.requester_agent_id,
+    dedicatedWorktree: Boolean(row.dedicated_worktree),
+    readOnly: Boolean(row.read_only),
+    singleResponse: Boolean(row.single_response),
+    inheritContext: Boolean(row.inherit_context),
+    maxSubAgents: row.max_sub_agents,
+    allowedTools: parseAllowedTools(row.allowed_tools_json),
+    systemPrompt: row.system_prompt,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(events ? { events } : {}),
     ...(commands ? { commands } : {}),
     ...(queue ? { queue } : {}),
   };
+}
+
+function parseAllowedTools(value: string | null): string[] | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : null;
+  } catch {
+    return null;
+  }
 }
 
 export function statusGlyph(status: string): string {

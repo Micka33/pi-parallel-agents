@@ -15,8 +15,8 @@ function createAgent(repoRoot, overrides) {
     display_name: agentId,
     repo_root: repoRoot,
     status: "waiting",
-    workspace_mode: "current",
-    access_mode: "read_only",
+    dedicated_worktree: 0,
+    read_only: 1,
     cwd: repoRoot,
     model: "gpt-5.5",
     thinking: "high",
@@ -74,8 +74,8 @@ test("agents-open argument completions cover sorting, fallback labels, and catch
   const db = openStateDb(join(repoRoot, ".pi", "parallel-agents", "state.sqlite"));
   try {
     initializeState(db);
-    upsertAgent(db, createAgent(repoRoot, { agent_id: "zzz", display_name: "zzz", status: "waiting", workspace_mode: "worktree", model: null, thinking: null }));
-    upsertAgent(db, createAgent(repoRoot, { agent_id: "aaa", display_name: "aaa", status: "waiting", workspace_mode: "worktree", model: null, thinking: null }));
+    upsertAgent(db, createAgent(repoRoot, { agent_id: "zzz", display_name: "zzz", status: "waiting", dedicated_worktree: 1, read_only: 0, model: null, thinking: null }));
+    upsertAgent(db, createAgent(repoRoot, { agent_id: "aaa", display_name: "aaa", status: "waiting", dedicated_worktree: 1, read_only: 0, model: null, thinking: null }));
     db.prepare("UPDATE agents SET updated_at = ? WHERE agent_id = ?").run("2026-01-01T00:00:00.000Z", "zzz");
     db.prepare("UPDATE agents SET updated_at = ? WHERE agent_id = ?").run("2026-01-01T00:00:00.000Z", "aaa");
   } finally {
@@ -85,7 +85,7 @@ test("agents-open argument completions cover sorting, fallback labels, and catch
   const matches = agentsOpenArgumentCompletions("waiting worktree", repoRoot);
   assert.deepEqual(matches?.map((item) => item.value), ["aaa", "zzz"]);
   assert.equal(matches?.[0]?.label, "aaa");
-  assert.match(matches?.[0]?.description ?? "", /worktree · \?\/\?/);
+  assert.match(matches?.[0]?.description ?? "", /worktree\/write · \?\/\?/);
 
   const brokenRepoRoot = mkdtempSync(join(tmpdir(), "pa-completions-broken-"));
   writeFileSync(join(brokenRepoRoot, ".broken-state"), "not a sqlite db");

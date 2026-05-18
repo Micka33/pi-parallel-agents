@@ -1,9 +1,10 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildChildPrompt } from "../config/task-presets.js";
 import type { ResolvedAgentOptions } from "../config/resolve-agent-options.js";
+import { resolveChildAllowedTools } from "../security/tool-policy.js";
 import { runtimeDir, scriptPath, stateDbPath, tasksDbPath } from "../util/paths.js";
 import { runJsonScript } from "./script-runner.js";
 
@@ -11,8 +12,13 @@ export interface StartParallelAgentResult {
   agentId: string;
   displayName: string;
   pid: number | null;
-  workspaceMode: "worktree" | "current";
-  accessMode: "read_only" | "write";
+  dedicatedWorktree: boolean;
+  readOnly: boolean;
+  singleResponse: boolean;
+  inheritContext: boolean;
+  maxSubAgents: number;
+  allowedTools: string[] | null;
+  requesterAgentId: string | null;
   cwd: string;
   provider: string | null;
   model: string;
@@ -29,6 +35,7 @@ export interface StartAgentInput {
   parentPrompt: string;
   options: ResolvedAgentOptions;
   ctx: ExtensionContext;
+  activeTools?: string[];
 }
 
 export async function startParallelAgent(input: StartAgentInput): Promise<StartParallelAgentResult> {
@@ -39,8 +46,16 @@ export async function startParallelAgent(input: StartAgentInput): Promise<StartP
   const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const contextPath = join(tmpDir, `context-${suffix}.json`);
   const promptPath = join(tmpDir, `prompt-${suffix}.md`);
-  const prompt = buildChildPrompt(input.options, input.parentPrompt);
+  const prompt = buildChildPrompt(input.options, input.options.inheritContext ? "" : input.parentPrompt);
   const parentSessionId = resolveParentSessionId(input.ctx);
+  const requesterAgentId = resolveRequesterAgentId(input.ctx);
+  const allowedTools = resolveChildAllowedTools({
+    inheritedTools: input.activeTools,
+    allowedTools: input.options.allowedTools,
+    readOnly: input.options.readOnly,
+    maxSubAgents: input.options.maxSubAgents,
+  });
+  const inheritedSession = input.options.inheritContext ? createInheritedSessionFile(input.ctx, tmpDir, suffix) : null;
 
   writeFileSync(
     contextPath,
@@ -48,6 +63,7 @@ export async function startParallelAgent(input: StartAgentInput): Promise<StartP
       {
         repoRoot: input.repoRoot,
         parentSessionId,
+        requesterAgentId,
         parentPrompt: input.parentPrompt,
         agentPrompt: input.options.prompt,
         name: input.options.name,
@@ -55,8 +71,17 @@ export async function startParallelAgent(input: StartAgentInput): Promise<StartP
         provider: input.options.provider,
         model: input.options.model,
         thinking: input.options.thinking,
-        workspaceMode: input.options.workspaceMode,
-        accessMode: input.options.accessMode,
+        thinkingLevel: input.options.thinkingLevel,
+        dedicatedWorktree: input.options.dedicatedWorktree,
+        readOnly: input.options.readOnly,
+        singleResponse: input.options.singleResponse,
+        inheritContext: input.options.inheritContext,
+        inheritedSessionFile: inheritedSession?.sessionFile ?? null,
+        inheritedSessionLeafId: inheritedSession?.leafId ?? null,
+        maxSubAgents: input.options.maxSubAgents,
+        allowedTools,
+        systemPrompt: input.options.systemPrompt,
+        keep: input.options.keep,
       },
       null,
       2,
@@ -73,10 +98,6 @@ export async function startParallelAgent(input: StartAgentInput): Promise<StartP
     input.options.model,
     "--thinking",
     input.options.thinking,
-    "--workspace-mode",
-    input.options.workspaceMode,
-    "--access-mode",
-    input.options.accessMode,
     "--state-db",
     stateDbPath(input.repoRoot),
     "--tasks-db",
@@ -84,15 +105,80 @@ export async function startParallelAgent(input: StartAgentInput): Promise<StartP
   ];
   if (input.options.provider) args.push("--provider", input.options.provider);
 
-  const result = await runJsonScript<StartParallelAgentResult>(scriptPath("start-parallel-agent.sh"), args, {
-    cwd: input.repoRoot,
-    timeoutMs: Number(process.env.PI_PARALLEL_AGENTS_EXTENSION_START_TIMEOUT_MS ?? 45_000),
-  });
+  const timeoutMs = resolveStartScriptTimeout(input.options.singleResponse);
+  const result = await runJsonScript<StartParallelAgentResult>(
+    scriptPath("start-parallel-agent.sh"),
+    args,
+    timeoutMs === undefined ? { cwd: input.repoRoot } : { cwd: input.repoRoot, timeoutMs },
+  );
   return result.json;
 }
 
-function resolveParentSessionId(ctx: ExtensionContext): string {
+interface InheritedSessionFile {
+  sessionFile: string;
+  leafId: string;
+}
+
+interface BranchEntry {
+  type: string;
+  id: string;
+  parentId: string | null;
+  message?: { role?: string };
+}
+
+function createInheritedSessionFile(ctx: ExtensionContext, tmpDir: string, suffix: string): InheritedSessionFile | null {
+  const branch = (ctx.sessionManager.getBranch?.() ?? []) as BranchEntry[];
+  const preLaunchLeafId = findPreLaunchLeafId(branch);
+  if (!preLaunchLeafId) return null;
+
+  const inheritedBranch = (ctx.sessionManager.getBranch?.(preLaunchLeafId) ?? []) as BranchEntry[];
+  if (inheritedBranch.length === 0) return null;
+
+  const timestamp = new Date().toISOString();
+  const sessionId = `parallel-inherited-${randomUUID()}`;
+  const sessionFile = join(tmpDir, `inherited-${suffix}.jsonl`);
+  const header = {
+    type: "session",
+    version: 3,
+    id: sessionId,
+    timestamp,
+    cwd: ctx.sessionManager.getCwd?.() ?? ctx.cwd,
+    parentSession: ctx.sessionManager.getSessionFile?.(),
+  };
+  writeFileSync(sessionFile, [header, ...inheritedBranch].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  return { sessionFile, leafId: preLaunchLeafId };
+}
+
+function findPreLaunchLeafId(branch: BranchEntry[]): string | null {
+  if (branch.length === 0) return null;
+  const launchUserIndex = findLastIndex(branch, (entry) => entry.type === "message" && entry.message?.role === "user");
+  if (launchUserIndex === -1) return branch.at(-1)?.id ?? null;
+  if (launchUserIndex === 0) return null;
+  return branch[launchUserIndex - 1]?.id ?? null;
+}
+
+function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item !== undefined && predicate(item)) return index;
+  }
+  return -1;
+}
+
+function resolveStartScriptTimeout(singleResponse: boolean): number | undefined {
+  if (singleResponse) {
+    const value = Number(process.env.PI_PARALLEL_AGENTS_EXTENSION_SINGLE_RESPONSE_TIMEOUT_MS ?? 0);
+    return value > 0 ? value : undefined;
+  }
+  return Number(process.env.PI_PARALLEL_AGENTS_EXTENSION_START_TIMEOUT_MS ?? 45_000);
+}
+
+export function resolveParentSessionId(ctx: ExtensionContext): string {
   const sessionFile = ctx.sessionManager.getSessionFile?.();
   if (sessionFile) return `pi-session:${createHash("sha256").update(sessionFile).digest("hex").slice(0, 16)}`;
   return `pi-process:${process.pid}`;
+}
+
+export function resolveRequesterAgentId(ctx: ExtensionContext): string {
+  return process.env.PI_PARALLEL_AGENTS_AGENT_ID || resolveParentSessionId(ctx);
 }

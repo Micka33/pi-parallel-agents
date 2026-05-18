@@ -1,5 +1,3 @@
-import type { AccessMode, WorkspaceMode } from "../constants.js";
-
 export type AgentStatus = "starting" | "running" | "waiting" | "stopped" | "crashed" | "done" | "cleaned";
 
 export interface AgentStateRow {
@@ -8,8 +6,6 @@ export interface AgentStateRow {
   display_name: string;
   repo_root: string;
   status: AgentStatus;
-  workspace_mode: WorkspaceMode;
-  access_mode: AccessMode;
   pid: number | null;
   cwd: string;
   worktree_path: string | null;
@@ -23,6 +19,14 @@ export interface AgentStateRow {
   diff_summary: string | null;
   tests_json: string | null;
   last_error: string | null;
+  requester_agent_id: string | null;
+  dedicated_worktree: number;
+  read_only: number;
+  single_response: number;
+  inherit_context: number;
+  max_sub_agents: number;
+  allowed_tools_json: string | null;
+  system_prompt: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -52,7 +56,7 @@ export interface AgentCommandRow {
 }
 
 export type QueueDirection = "incoming" | "outgoing";
-export type QueueMode = "steer" | "queue" | "reply" | "consult";
+export type QueueMode = "steer" | "queue" | "reply";
 export type QueueStatus = "queued" | "delivered" | "answered" | "done" | "blocked" | "canceled";
 
 export interface QueueQuestionRow {
@@ -76,8 +80,6 @@ export interface ParallelAgent {
   parentSessionId: string;
   repoRoot: string;
   status: AgentStatus;
-  workspaceMode: WorkspaceMode;
-  accessMode: AccessMode;
   pid: number | null;
   cwd: string;
   worktreePath: string | null;
@@ -91,6 +93,14 @@ export interface ParallelAgent {
   diffSummary: string | null;
   testsJson: string | null;
   lastError: string | null;
+  requesterAgentId: string | null;
+  dedicatedWorktree: boolean;
+  readOnly: boolean;
+  singleResponse: boolean;
+  inheritContext: boolean;
+  maxSubAgents: number;
+  allowedTools: string[] | null;
+  systemPrompt: string | null;
   createdAt: string;
   updatedAt: string;
   events?: AgentEventRow[];

@@ -1,36 +1,35 @@
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { buildResultsReview } from "../review/results-review.js";
 import type { ParallelAgent } from "../state/types.js";
-import { renderAgentDetails } from "./render-agents.js";
-import { renderQueueLine } from "./render-queues.js";
+import { renderAgentsList } from "./render-agents.js";
 
-export function renderAgentsOverlay(agents: ParallelAgent[], repoRoot: string): string {
-  if (agents.length === 0) return "No parallel agents recorded for this repo.";
-  const statusCounts = countBy(agents, (agent) => agent.status);
-  const blocked = agents.flatMap((agent) => (agent.queue ?? []).filter((question) => question.status === "blocked"));
-  const incoming = agents.flatMap((agent) => (agent.queue ?? []).filter((question) => question.direction === "incoming" && question.status === "queued"));
-  const guardrails = agents
-    .filter((agent) => agent.workspaceMode === "current")
-    .map((agent) => `! ${agent.agentId}: current/${agent.accessMode} shares the parent checkout${agent.accessMode === "write" ? " and can modify it" : ""}`);
-
-  return [
-    "Parallel agents overlay",
-    `Repo: ${repoRoot}`,
-    `Status: ${Object.entries(statusCounts).map(([status, count]) => `${status}=${count}`).join(", ")}`,
-    "Actions: /agents-open <id> · /agents-consult <id> <question> · /agents-steer <id> <message> · /agents-ask <id> <message> · /agents-retry <id> <question-id> · /agents-review [id] · /agents-stop <id> · /agents-resume <id>",
+export function renderOverlay(repoRoot: string, agents: ParallelAgent[]): string {
+  const counts = countBy(agents, (agent) => agent.status);
+  const header = `Parallel agents · ${repoRoot} · ${Object.entries(counts).map(([status, count]) => `${status}:${count}`).join(" ") || "none"}`;
+  const visible = agents.filter((agent) => agent.status !== "cleaned");
+  const guardrails = visible
+    .filter((agent) => !agent.dedicatedWorktree)
+    .map((agent) => `! ${agent.agentId}: shared checkout (${agent.readOnly ? "read-only" : "write"})`);
+  const blocked = visible.flatMap((agent) => (agent.queue ?? []).filter((question) => question.status === "blocked").map((question) => `? blocked ${agent.agentId}/${question.question_id}: ${question.message}`));
+  const incoming = visible.flatMap((agent) => (agent.queue ?? []).filter((question) => question.direction === "incoming" && question.status === "queued").map((question) => `? reply ${agent.agentId}/${question.question_id}: ${question.message}`));
+  const lines = [
+    header,
+    renderAgentsList(visible, repoRoot),
     guardrails.length ? `Guardrails:\n${guardrails.join("\n")}` : undefined,
-    blocked.length ? `Blocked questions:\n${blocked.map(renderQueueLine).join("\n")}` : undefined,
-    incoming.length ? `Incoming questions awaiting reply:\n${incoming.map(renderQueueLine).join("\n")}` : undefined,
-    "",
-    ...agents.map((agent) => renderAgentDetails(agent, repoRoot)),
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n");
+    blocked.length ? `Blocked:\n${blocked.join("\n")}` : undefined,
+    incoming.length ? `Incoming questions:\n${incoming.join("\n")}` : undefined,
+    "Actions: /agents-open <id> · /agents-steer <id> <message> · /agents-ask <id> <message> · /agents-retry <id> <question-id> · /agents-review [id] · /agents-stop <id> · /agents-resume <id>",
+  ];
+  return lines.filter((line): line is string => Boolean(line)).join("\n");
 }
 
-export function showAgentsOverlay(ctx: ExtensionCommandContext, agents: ParallelAgent[], repoRoot: string): void {
-  // Keep the UX portable across Pi modes: render multi-agent status, queues, and
-  // actionable commands in a notification panel.
-  ctx.ui.notify(renderAgentsOverlay(agents, repoRoot), "info");
+export function showAgentsOverlay(ctx: ExtensionContext, agents: ParallelAgent[], repoRoot: string): void {
+  ctx.ui.notify(renderOverlay(repoRoot, agents), "info");
+}
+
+export function notifyReview(ctx: ExtensionContext, repoRoot: string, agentId?: string): void {
+  const review = buildResultsReview(repoRoot, agentId);
+  ctx.ui.notify(review.markdown, "info");
 }
 
 function countBy<T>(items: T[], keyFn: (item: T) => string): Record<string, number> {

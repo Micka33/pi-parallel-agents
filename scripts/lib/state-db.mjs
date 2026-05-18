@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
-export const STATE_SCHEMA_VERSION = 2;
+export const STATE_SCHEMA_VERSION = 1;
 export const DEFAULT_MODEL = "gpt-5.5";
 export const DEFAULT_THINKING = "high";
 
@@ -16,8 +16,6 @@ export const AGENT_COLUMNS = [
   "display_name",
   "repo_root",
   "status",
-  "workspace_mode",
-  "access_mode",
   "pid",
   "cwd",
   "worktree_path",
@@ -31,6 +29,14 @@ export const AGENT_COLUMNS = [
   "diff_summary",
   "tests_json",
   "last_error",
+  "requester_agent_id",
+  "dedicated_worktree",
+  "read_only",
+  "single_response",
+  "inherit_context",
+  "max_sub_agents",
+  "allowed_tools_json",
+  "system_prompt",
   "created_at",
   "updated_at",
 ];
@@ -55,8 +61,6 @@ const REQUIRED_AGENT_FIELDS = [
   "display_name",
   "repo_root",
   "status",
-  "workspace_mode",
-  "access_mode",
   "cwd",
 ];
 
@@ -76,20 +80,12 @@ export function openStateDb(dbPath) {
 
 export function migrate(db) {
   const version = db.prepare("PRAGMA user_version").get()?.user_version ?? 0;
-  if (version > STATE_SCHEMA_VERSION) {
-    throw new Error(`Unsupported parallel-agents state schema version ${version}; this package supports ${STATE_SCHEMA_VERSION}`);
+  if (version === STATE_SCHEMA_VERSION) return;
+  if (version === 0) {
+    db.exec(readFileSync(join(sqlDir, "state_schema.sql"), "utf8"));
+    return;
   }
-
-  let currentVersion = version;
-  if (currentVersion === 0) {
-    db.exec(readFileSync(join(sqlDir, "001_state_schema.sql"), "utf8"));
-    db.exec(readFileSync(join(sqlDir, "002_state_indexes.sql"), "utf8"));
-    currentVersion = 1;
-  }
-  if (currentVersion < 2) {
-    db.exec(readFileSync(join(sqlDir, "003_state_v2.sql"), "utf8"));
-    currentVersion = 2;
-  }
+  throw new Error(`Unsupported parallel-agents state schema version ${version}; delete state.sqlite for a clean development install.`);
 }
 
 export function initializeState(db) {
@@ -122,6 +118,26 @@ export function listAgents(db, { repoRoot, agentId } = {}) {
   return db.prepare("SELECT * FROM agents ORDER BY created_at ASC").all();
 }
 
+export function listDirectChildren(db, requesterAgentId) {
+  if (!requesterAgentId) return [];
+  return db
+    .prepare("SELECT * FROM agents WHERE requester_agent_id = ? AND status != 'cleaned' ORDER BY created_at ASC")
+    .all(requesterAgentId);
+}
+
+export function assertRequesterCanStartChild(db, requesterAgentId) {
+  if (!requesterAgentId) return;
+  const requester = getAgent(db, requesterAgentId);
+  if (!requester) return;
+  const limit = Number(requester.max_sub_agents ?? 0);
+  const children = listDirectChildren(db, requesterAgentId);
+  if (children.length < limit) return;
+  const active = children.map((child) => ({ agentId: child.agent_id, status: child.status }));
+  throw new Error(
+    `Sub-agent limit exceeded for requester ${requesterAgentId}: configured limit=${limit}, current child count=${children.length}, active children=${JSON.stringify(active)}. Stop/clean an existing child or start the requester with a higher maxSubAgents.`,
+  );
+}
+
 export function upsertAgent(db, fields) {
   return withImmediateTransaction(db, () => {
     const normalizedFields = normalizeAgentFields(fields);
@@ -133,6 +149,7 @@ export function upsertAgent(db, fields) {
       created_at: existing?.created_at ?? normalizedFields.created_at ?? timestamp,
       updated_at: timestamp,
     };
+    applyAgentMetadataDefaults(merged);
 
     for (const key of REQUIRED_AGENT_FIELDS) {
       if (merged[key] === undefined || merged[key] === null || merged[key] === "") {
@@ -314,6 +331,14 @@ function setSettingRaw(db, key, value, timestamp, overwrite) {
   ).run(key, JSON.stringify(value), timestamp);
 }
 
+function applyAgentMetadataDefaults(fields) {
+  if (fields.dedicated_worktree === undefined || fields.dedicated_worktree === null) fields.dedicated_worktree = fields.worktree_path ? 1 : 0;
+  if (fields.read_only === undefined || fields.read_only === null) fields.read_only = fields.dedicated_worktree ? 0 : 1;
+  if (fields.single_response === undefined || fields.single_response === null) fields.single_response = 0;
+  if (fields.inherit_context === undefined || fields.inherit_context === null) fields.inherit_context = 0;
+  if (fields.max_sub_agents === undefined || fields.max_sub_agents === null) fields.max_sub_agents = 0;
+}
+
 function normalizeAgentFields(fields) {
   const normalized = { ...fields };
   const aliasMap = {
@@ -321,8 +346,6 @@ function normalizeAgentFields(fields) {
     parentSessionId: "parent_session_id",
     displayName: "display_name",
     repoRoot: "repo_root",
-    workspaceMode: "workspace_mode",
-    accessMode: "access_mode",
     worktreePath: "worktree_path",
     branchName: "branch_name",
     sessionId: "session_id",
@@ -330,6 +353,14 @@ function normalizeAgentFields(fields) {
     diffSummary: "diff_summary",
     testsJson: "tests_json",
     lastError: "last_error",
+    requesterAgentId: "requester_agent_id",
+    dedicatedWorktree: "dedicated_worktree",
+    readOnly: "read_only",
+    singleResponse: "single_response",
+    inheritContext: "inherit_context",
+    maxSubAgents: "max_sub_agents",
+    allowedToolsJson: "allowed_tools_json",
+    systemPrompt: "system_prompt",
   };
   for (const [from, to] of Object.entries(aliasMap)) {
     if (Object.prototype.hasOwnProperty.call(normalized, from) && !Object.prototype.hasOwnProperty.call(normalized, to)) {

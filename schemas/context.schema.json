@@ -6,6 +6,7 @@
   "properties": {
     "repoRoot": { "type": "string" },
     "parentSessionId": { "type": "string" },
+    "requesterAgentId": { "type": ["string", "null"] },
     "parentPrompt": { "type": "string" },
     "agentPrompt": { "type": "string" },
     "name": { "type": "string" },
@@ -13,8 +14,17 @@
     "provider": { "type": "string" },
     "model": { "type": "string", "default": "gpt-5.5" },
     "thinking": { "type": "string", "default": "high" },
-    "workspaceMode": { "enum": ["worktree", "current"], "default": "worktree" },
-    "accessMode": { "enum": ["read_only", "write"] }
+    "thinkingLevel": { "type": "string", "default": "high" },
+    "dedicatedWorktree": { "type": "boolean", "default": true },
+    "readOnly": { "type": "boolean" },
+    "singleResponse": { "type": "boolean", "default": false },
+    "inheritContext": { "type": "boolean", "default": false },
+    "inheritedSessionFile": { "type": ["string", "null"] },
+    "inheritedSessionLeafId": { "type": ["string", "null"] },
+    "maxSubAgents": { "type": "integer", "minimum": 0, "default": 0 },
+    "allowedTools": { "type": "array", "items": { "type": "string" } },
+    "systemPrompt": { "type": "string" },
+    "keep": { "type": "boolean", "default": false }
   },
   "additionalProperties": true
 }

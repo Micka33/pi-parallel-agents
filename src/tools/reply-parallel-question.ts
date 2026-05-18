@@ -23,7 +23,17 @@ export async function replyParallelQuestion(params: ReplyParallelQuestionInput, 
   if (question.agent_id !== params.agentId) throw new Error(`Question ${params.questionId} belongs to ${question.agent_id}, not ${params.agentId}`);
 
   const answered = adapter.answerQuestion(params.questionId, params.response, params.status ?? "answered") ?? question;
-  const command = await enqueueUiResponseDelivery(repoRoot, answered, params.response);
+  const command = isUiContextQuestion(answered) ? null : await enqueueUiResponseDelivery(repoRoot, answered, params.response);
   updateParallelAgentsWidget(ctx, repoRoot);
   return { ok: true, action: "reply", question: answered, command };
+}
+
+function isUiContextQuestion(question: { metadata_json: string | null }): boolean {
+  if (!question.metadata_json) return false;
+  try {
+    const metadata = JSON.parse(question.metadata_json) as { transport?: unknown };
+    return metadata.transport === "ui_context";
+  } catch {
+    return false;
+  }
 }

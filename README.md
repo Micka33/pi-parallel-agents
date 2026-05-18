@@ -1,63 +1,48 @@
 # pi-parallel-agents
 
-Pi extension and lifecycle scripts for launching parallel Pi sub-agents.
+Pi extension and lifecycle scripts for SDK-backed Pi sub-agents.
 
-## Version 1 livrables
+## Current model
 
-- Pi extension entrypoint: `src/parallel-agents.ts`
-- Tools: `launch_parallel_agents`, `get_parallel_agents`
-- Commands: `/agents`, `/agents-open <id>`, `/agents-summary [--all|--include-cleaned]` (`/agents-open` autocompletes known agent IDs; `/agents-summary` autocompletes its flags)
-- Skill: `skills/pi-parallel-agents/SKILL.md` documents `launch_parallel_agents`, `get_parallel_agents`, defaults, model selection, and Pi thinking levels
-- Minimal widget above the editor with status, workspace, model/thinking, cwd and session
-- SQLite state store: `<repoRoot>/.pi/parallel-agents/state.sqlite`
-- Lifecycle scripts:
-  - `scripts/start-parallel-agent.sh`
-  - `scripts/parallel-agent-state.sh`
-- Workspace modes:
-  - `worktree` (default): creates `../pi/<worktree-name>` and a branch
-  - `current`: runs in the repo checkout with `read_only` access by default
-- Provider/model defaults: child agents inherit the parent session `provider/model` unless an agent override or launch default is provided; fallback is `model = gpt-5.5`
-- Thinking default: `high`, unless an agent override or launch default is provided
-- Optional `launch_parallel_agents.repoRoot` lets a parent session launch agents from a nested git repo/workspace
-- `launch_parallel_agents` returns partial results as `{ launched, failed }` so one failed child does not hide other launch attempts
+- Primary creation tool: `start_agent(prompt, dedicatedWorktree, inheritContext, systemPrompt, readOnly, singleResponse, maxSubAgents, provider, model, thinkingLevel, allowedTools)`.
+- Persistent child agents run in a small Node SDK worker process using `AgentSessionRuntime`/`SessionManager`.
+- One-shot questions are `start_agent` calls with `singleResponse=true`, usually `dedicatedWorktree=true` and `readOnly=true`.
 
-## Version 2 livrables
+## Tools
 
-- Lifecycle control:
-  - `scripts/stop-parallel-agent.sh`
-  - `scripts/clean-parallel-agent.sh`
-  - `scripts/start-parallel-agent.sh --resume-session --agent-id <id>`
-- Tools:
-  - `control_parallel_agent` with `stop`, `resume`, `set_defaults`, `refresh`, `mark_done`, `clean`
-  - `message_parallel_agent` with `mode = "steer" | "queue"`
-  - `reply_parallel_question`
-- Commands:
-  - `/agents-stop <id>`
-  - `/agents-resume <id>`
-  - `/agents-defaults <model> [thinking]`
-  - `/agents-clean <id> [--worktree] [--branch] [--session] [--force]`
-  - `/agents-steer <id> <message>`
-  - `/agents-ask <id> <message>`
-- Durable state:
-  - `state.sqlite` now includes `agent_commands` for supervisor-delivered RPC commands
-  - `tasks.sqlite` includes `parallel_questions`; queue state is mirrored into pi-tasks lists/tasks through `@micka33/pi-tasks`
-  - By default this database remains `<repoRoot>/.pi/parallel-agents/tasks.sqlite`; set `PI_TASKS_DB_PATH` to share a database with a separately installed pi-tasks extension
-- Child RPC supervisors poll queued commands and deliver `steer`, `follow_up`, and `extension_ui_response` messages when the child process is alive or resumed.
-- `/agents` and `/agents-open` show queue/command details and actionable command hints.
+- `start_agent`: create one child agent with explicit options.
+- `get_parallel_agents`: inspect persisted child state, sessions, worktrees, commands, queues, and logs.
+- `control_parallel_agent`: `stop`, `resume`, `set_defaults`, `refresh`, `mark_done`, `clean`, `retry_question`, `review_results`.
+- `message_parallel_agent`: send `steer` or durable `queue` messages to an existing child.
+- `reply_parallel_question`: answer a durable question raised by a child.
 
-## Version 3 livrables
+## Defaults and guardrails
 
-- Isolated consultation:
-  - `message_parallel_agent` now supports `mode = "consult"` for `workspaceMode = "worktree"` agents.
-  - `scripts/consult-subagent-clone.sh` creates a temporary `../pi/consult-*` worktree and cloned session file, runs a read-only Pi RPC with `thinking = xhigh` by default, returns the answer, then removes the temporary session/worktree/branch unless `debug` is set.
-  - `consult` is refused for `workspaceMode = "current"` because the source checkout is shared and cannot guarantee file isolation.
-- Retry/review UX:
-  - `control_parallel_agent` adds `retry_question` for blocked outgoing `steer`/`queue` rows and `review_results` for consolidated summaries, blocked questions, and recommendations.
-  - New commands: `/agents-consult <id> <question>`, `/agents-retry <id> <question-id>`, `/agents-review [id]`.
-  - `/agents` overlay now includes repo/status counts, guardrail warnings, blocked questions, incoming questions awaiting reply, and advanced command hints.
-- Guardrails:
-  - `current/write` remains blocked at launch; use `worktree/write` for modifications or `current/read_only` for analysis.
-  - Consult questions are passed as argv through `spawn`/`execFile`-style APIs with `shell: false`; NUL bytes and oversized prompts are refused.
+- `dedicatedWorktree`: defaults to `true`.
+- `readOnly`: defaults to `false` for dedicated worktrees and `true` for shared/current checkout.
+- `singleResponse`: defaults to `false`.
+- `inheritContext`: defaults to `false`; when `true`, the child forks the requester session at the pre-launch leaf so the launch request itself is excluded.
+- `maxSubAgents`: defaults to `0` and is enforced before worktree/session creation.
+- Provider/model inherit from the requesting session unless overridden; configured fallback model is `gpt-5.5`.
+- Thinking level inherits from the requesting session unless overridden; fallback default is `high`.
+- Shared-checkout write access is blocked; use shared read-only analysis or a write-capable dedicated worktree.
+- Read-only mode is enforced by the actual SDK tool allowlist, not only prompt text.
+
+## State and lifecycle
+
+- SQLite state store: `<repoRoot>/.pi/parallel-agents/state.sqlite`.
+- Queue/mirror store: `<repoRoot>/.pi/parallel-agents/tasks.sqlite` unless `PI_TASKS_DB_PATH` is set.
+- `state.sqlite` includes child metadata such as `sessionFile`, `cwd`, worktree/branch, read-only mode, allowed tools, requester id, and `maxSubAgents`.
+- SDK workers subscribe to session events and update status: `starting`, `running`, `waiting`, `stopped`, `crashed`, `done`, `cleaned`.
+- Worker command polling delivers `steer`, `follow_up`, `abort`, and state commands through SDK session APIs.
+
+## Commands
+
+- `/agents`, `/agents-open <id>`, `/agents-summary [--all|--include-cleaned]`
+- `/agents-stop <id>`, `/agents-resume <id>`, `/agents-defaults <model> [thinking]`
+- `/agents-clean <id> [--worktree] [--branch] [--session] [--force]`
+- `/agents-steer <id> <message>`, `/agents-ask <id> <message>`
+- `/agents-retry <id> <question-id>`, `/agents-review [id]`
 
 ## Build and test
 
@@ -67,7 +52,7 @@ npm run build
 npm test
 ```
 
-The tests use `tests/fixtures/fake-pi-rpc.mjs` and do not call a real model.
+The tests use deterministic fake SDK behavior through `tests/fixtures/fake-pi.mjs`/`PI_PARALLEL_AGENTS_FAKE_SDK` and do not call a real model.
 
 ## Manual script example
 
@@ -76,14 +61,13 @@ scripts/start-parallel-agent.sh \
   --context /path/to/context.json \
   --prompt /path/to/prompt.md \
   --model gpt-5.5 \
-  --thinking high \
-  --workspace-mode worktree
+  --thinking high
 ```
 
 For deterministic local script tests without calling the naming agent:
 
 ```bash
 PI_PARALLEL_AGENTS_DISABLE_NAMING_AGENT=1 \
-PI_PARALLEL_AGENTS_PI_BIN=tests/fixtures/fake-pi-rpc.mjs \
+PI_PARALLEL_AGENTS_PI_BIN=tests/fixtures/fake-pi.mjs \
 scripts/start-parallel-agent.sh ...
 ```

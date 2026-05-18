@@ -4,11 +4,11 @@ import type { ParallelAgent } from "../state/types.js";
 import { renderQueueList } from "./render-queues.js";
 
 export function renderAgentLine(agent: ParallelAgent, repoRoot: string): string {
-  const workspace = `${agent.workspaceMode}/${agent.accessMode}`;
+  const isolation = `${agent.dedicatedWorktree ? "worktree" : "shared"}/${agent.readOnly ? "read-only" : "write"}`;
   const modelThinking = `${agent.model ?? "?"}/${agent.thinking ?? "?"}`;
   const cwd = formatPath(agent.cwd, repoRoot);
   const session = agent.sessionId ? `session ${short(agent.sessionId)}` : agent.sessionFile ? "session file" : "no session";
-  return `${statusGlyph(agent.status)} ${agent.displayName.padEnd(12)} ${agent.status.padEnd(9)} ${workspace.padEnd(17)} ${modelThinking.padEnd(16)} ${cwd} · ${session}`;
+  return `${statusGlyph(agent.status)} ${agent.displayName.padEnd(12)} ${agent.status.padEnd(9)} ${isolation.padEnd(19)} ${modelThinking.padEnd(16)} ${cwd} · ${session}`;
 }
 
 export function renderAgentsList(agents: ParallelAgent[], repoRoot: string): string {
@@ -20,9 +20,10 @@ export function renderAgentDetails(agent: ParallelAgent, repoRoot: string): stri
   return [
     `${agent.displayName} (${agent.agentId})`,
     `- status: ${agent.status}`,
-    `- workspaceMode: ${agent.workspaceMode}`,
-    `- accessMode: ${agent.accessMode}`,
-    agent.workspaceMode === "current" ? `- guardrail: shares the parent checkout${agent.accessMode === "write" ? " and may modify it" : "; read-only tools only"}` : undefined,
+    `- dedicatedWorktree: ${agent.dedicatedWorktree}`,
+    `- readOnly: ${agent.readOnly}`,
+    `- maxSubAgents: ${agent.maxSubAgents}`,
+    agent.dedicatedWorktree ? undefined : `- guardrail: shares the parent checkout; ${agent.readOnly ? "read-only tools only" : "write access blocked by default"}`,
     `- cwd: ${formatPath(agent.cwd, repoRoot)}`,
     `- worktree: ${agent.worktreePath ? formatPath(agent.worktreePath, repoRoot) : "none"}`,
     `- branch: ${agent.branchName ?? "current checkout"}`,

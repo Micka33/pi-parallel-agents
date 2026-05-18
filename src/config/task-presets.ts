@@ -3,20 +3,20 @@ import { promptPath } from "../util/paths.js";
 import type { ResolvedAgentOptions } from "./resolve-agent-options.js";
 
 export function buildChildPrompt(options: ResolvedAgentOptions, parentPrompt: string): string {
-  const basePrompt = readPrompt(options.accessMode === "read_only" ? "child-read-only.md" : "child-agent.md");
+  const basePrompt = readPrompt(options.readOnly ? "child-read-only.md" : "child-agent.md");
+  const parentSection = parentPrompt.trim() ? ["", "Parent request:", parentPrompt] : [];
   return [
     basePrompt,
-    "",
-    "Parent request:",
-    parentPrompt || "(not provided)",
+    ...parentSection,
     "",
     "Assigned sub-agent task:",
     options.prompt,
     "",
     "Execution metadata:",
     `- name: ${options.name}`,
-    `- workspaceMode: ${options.workspaceMode}`,
-    `- accessMode: ${options.accessMode}`,
+    `- dedicatedWorktree: ${options.dedicatedWorktree}`,
+    `- readOnly: ${options.readOnly}`,
+    `- maxSubAgents: ${options.maxSubAgents}`,
     `- model/thinking: ${options.model}/${options.thinking}`,
   ].join("\n");
 }

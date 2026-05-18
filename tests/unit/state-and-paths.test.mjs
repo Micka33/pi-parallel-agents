@@ -37,8 +37,8 @@ function insertAgent(db, repoRoot, agentId, overrides = {}) {
     display_name: agentId,
     repo_root: repoRoot,
     status: "waiting",
-    workspace_mode: "current",
-    access_mode: "read_only",
+    dedicated_worktree: 0,
+    read_only: 1,
     cwd: repoRoot,
     model: "model",
     thinking: "high",
@@ -53,8 +53,14 @@ function agent(overrides = {}) {
     parentSessionId: "parent",
     repoRoot: "/repo",
     status: "waiting",
-    workspaceMode: "current",
-    accessMode: "read_only",
+    dedicatedWorktree: false,
+    readOnly: true,
+    singleResponse: false,
+    inheritContext: false,
+    maxSubAgents: 0,
+    allowedTools: null,
+    systemPrompt: null,
+    requesterAgentId: null,
     pid: null,
     cwd: "/repo",
     worktreePath: null,
@@ -81,8 +87,14 @@ test("selectors map rows, optional collections, and all status glyphs", () => {
     parent_session_id: "parent",
     repo_root: "/repo",
     status: "running",
-    workspace_mode: "worktree",
-    access_mode: "write",
+    requester_agent_id: null,
+    dedicated_worktree: 1,
+    read_only: 0,
+    single_response: 0,
+    inherit_context: 0,
+    max_sub_agents: 0,
+    allowed_tools_json: null,
+    system_prompt: null,
     pid: 123,
     cwd: "/repo/wt",
     worktree_path: "/repo/wt",
@@ -106,8 +118,14 @@ test("selectors map rows, optional collections, and all status glyphs", () => {
     parentSessionId: "parent",
     repoRoot: "/repo",
     status: "running",
-    workspaceMode: "worktree",
-    accessMode: "write",
+    requesterAgentId: null,
+    dedicatedWorktree: true,
+    readOnly: false,
+    singleResponse: false,
+    inheritContext: false,
+    maxSubAgents: 0,
+    allowedTools: null,
+    systemPrompt: null,
     pid: 123,
     cwd: "/repo/wt",
     worktreePath: "/repo/wt",
@@ -132,6 +150,32 @@ test("selectors map rows, optional collections, and all status glyphs", () => {
     queue: [{ question_id: "q" }],
   });
 
+  const rowWithMetadata = {
+    ...row,
+    requester_agent_id: "requester",
+    dedicated_worktree: 1,
+    read_only: 1,
+    single_response: 1,
+    inherit_context: 1,
+    max_sub_agents: 3,
+    allowed_tools_json: JSON.stringify(["read", "grep"]),
+    system_prompt: "extra system",
+  };
+  assert.deepEqual(toParallelAgent(rowWithMetadata), {
+    ...toParallelAgent(row),
+    requesterAgentId: "requester",
+    dedicatedWorktree: true,
+    readOnly: true,
+    singleResponse: true,
+    inheritContext: true,
+    maxSubAgents: 3,
+    allowedTools: ["read", "grep"],
+    systemPrompt: "extra system",
+  });
+  assert.equal(toParallelAgent({ ...rowWithMetadata, allowed_tools_json: "not-json" }).allowedTools, null);
+  assert.equal(toParallelAgent({ ...rowWithMetadata, allowed_tools_json: JSON.stringify("read") }).allowedTools, null);
+  assert.deepEqual(toParallelAgent({ ...rowWithMetadata, allowed_tools_json: JSON.stringify(["read", 1, false, "ls"]) }).allowedTools, ["read", "ls"]);
+
   assert.deepEqual(
     ["running", "starting", "waiting", "stopped", "crashed", "done", "cleaned", "unknown"].map(statusGlyph),
     ["●", "◌", "○", "◼", "✖", "✓", "·", "?"],
@@ -144,8 +188,8 @@ test("TUI renderers cover agent lines, details, summaries, and queues", () => {
     agentId: "worktree-agent",
     displayName: "Worktree Agent",
     status: "done",
-    workspaceMode: "worktree",
-    accessMode: "write",
+    dedicatedWorktree: true,
+    readOnly: false,
     pid: 123,
     cwd: "/repo/worktrees/agent",
     worktreePath: "/repo/worktrees/agent",
@@ -183,11 +227,11 @@ test("TUI renderers cover agent lines, details, summaries, and queues", () => {
       created_at: "now",
     })),
   });
-  const currentWrite = agent({ accessMode: "write", sessionId: "short" });
+  const sharedWrite = agent({ readOnly: false, sessionId: "short" });
   const outside = agent({ cwd: "/outside/agent" });
 
   assert.match(renderAgentLine(base, "/repo"), /session session-id-/);
-  assert.match(renderAgentLine(currentWrite, "/repo"), /session short/);
+  assert.match(renderAgentLine(sharedWrite, "/repo"), /session short/);
   assert.match(renderAgentLine(worktree, "/repo"), /worktrees\/agent · session file/);
   assert.match(renderAgentLine(outside, "/repo"), /\/outside\/agent · no session/);
   assert.equal(renderAgentsList([], "/repo"), "No parallel agents recorded for this repo.");
@@ -203,7 +247,7 @@ test("TUI renderers cover agent lines, details, summaries, and queues", () => {
   assert.match(details, /#2 queue\/failed: blocked/);
   assert.match(details, /← q1 reply\/queued: short message · response: short response/);
   assert.match(details, /event-8/);
-  assert.match(renderAgentDetails(currentWrite, "/repo"), /shares the parent checkout and may modify it/);
+  assert.match(renderAgentDetails(sharedWrite, "/repo"), /shares the parent checkout; write access blocked by default/);
   assert.match(renderAgentDetails(base, "/repo"), /shares the parent checkout; read-only tools only/);
   assert.match(renderAgentDetails(agent({ queue: [] }), "/repo"), /No queued questions/);
 

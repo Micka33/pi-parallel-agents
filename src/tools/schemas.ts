@@ -1,7 +1,6 @@
 import { Type } from "typebox";
 
-const WorkspaceMode = Type.Union([Type.Literal("worktree"), Type.Literal("current")]);
-const AccessMode = Type.Union([Type.Literal("read_only"), Type.Literal("write")]);
+const NonNegativeInteger = Type.Number({ minimum: 0, multipleOf: 1 });
 const IncludeItem = Type.Union([
   Type.Literal("status"),
   Type.Literal("summary"),
@@ -23,27 +22,24 @@ const ControlAction = Type.Union([
   Type.Literal("review_results"),
 ]);
 
-const MessageMode = Type.Union([Type.Literal("steer"), Type.Literal("queue"), Type.Literal("consult")]);
+const MessageMode = Type.Union([Type.Literal("steer"), Type.Literal("queue")]);
 const ReplyStatus = Type.Union([Type.Literal("answered"), Type.Literal("done"), Type.Literal("blocked")]);
 
-export const LaunchParallelAgentsParams = Type.Object({
-  repoRoot: Type.Optional(Type.String({ description: "Git repo/workspace root to launch agents from. Defaults to this Pi session workspace." })),
-  defaultProvider: Type.Optional(Type.String({ description: "Provider to use for agents unless overridden. Defaults to the parent session provider." })),
-  defaultModel: Type.Optional(Type.String({ description: "Model to use for agents unless overridden. Defaults to the parent session model, then gpt-5.5." })),
-  defaultThinking: Type.Optional(Type.String({ description: "Thinking level unless overridden. Defaults to high." })),
-  parentPrompt: Type.Optional(Type.String({ description: "Original user request or high-level orchestration context." })),
-  agents: Type.Array(
-    Type.Object({
-      name: Type.String({ description: "Short logical name for this sub-agent." }),
-      prompt: Type.String({ description: "Task assigned to this sub-agent." }),
-      workspaceMode: Type.Optional(WorkspaceMode),
-      accessMode: Type.Optional(AccessMode),
-      provider: Type.Optional(Type.String()),
-      model: Type.Optional(Type.String()),
-      thinking: Type.Optional(Type.String()),
-    }),
-    { minItems: 1 },
-  ),
+export const StartAgentParams = Type.Object({
+  repoRoot: Type.Optional(Type.String({ description: "Git repo/workspace root to launch from. Defaults to this Pi session workspace." })),
+  name: Type.Optional(Type.String({ description: "Optional short logical display name for the child agent." })),
+  prompt: Type.String({ description: "Task assigned to the child agent." }),
+  dedicatedWorktree: Type.Optional(Type.Boolean({ description: "Create a dedicated git worktree for the child. Defaults to true." })),
+  inheritContext: Type.Optional(Type.Boolean({ description: "Fork or reconstruct safe requester context before the launch turn. Defaults to false." })),
+  systemPrompt: Type.Optional(Type.String({ description: "Optional extra system prompt text for the child session." })),
+  readOnly: Type.Optional(Type.Boolean({ description: "Restrict actual SDK tool list to read-only-safe tools. Defaults to !dedicatedWorktree." })),
+  singleResponse: Type.Optional(Type.Boolean({ description: "Return one completed response and automatically dispose/clean the child. Defaults to false." })),
+  maxSubAgents: Type.Optional(NonNegativeInteger),
+  provider: Type.Optional(Type.String({ description: "Provider override. Defaults to requesting session provider." })),
+  model: Type.Optional(Type.String({ description: "Model override. Defaults to requesting session model, then configured default." })),
+  thinkingLevel: Type.Optional(Type.String({ description: "Thinking level override. Defaults to configured/default thinking." })),
+  allowedTools: Type.Optional(Type.Array(Type.String({ description: "Tool name allowlist before read-only filtering." }))),
+  keep: Type.Optional(Type.Boolean({ description: "For singleResponse debug/audit: keep temporary worktree/session instead of cleaning." })),
 });
 
 export const GetParallelAgentsParams = Type.Object({
@@ -60,7 +56,7 @@ export const ControlParallelAgentParams = Type.Object({
   thinking: Type.Optional(Type.String({ description: "Default thinking level for action=set_defaults." })),
   summary: Type.Optional(Type.String({ description: "Summary for action=mark_done." })),
   diffSummary: Type.Optional(Type.String({ description: "Diff summary for action=mark_done." })),
-  testsJson: Type.Optional(Type.String({ description: "JSON string with test results for action=mark_done." })),
+  testsJson: Type.Optional(Type.String({ description: "JSON string with test results." })),
   questionId: Type.Optional(Type.String({ description: "Question id for action=retry_question." })),
   removeWorktree: Type.Optional(Type.Boolean({ description: "For clean: remove the agent worktree when safe." })),
   removeBranch: Type.Optional(Type.Boolean({ description: "For clean: remove the agent branch; requires explicit true." })),
@@ -75,9 +71,6 @@ export const MessageParallelAgentParams = Type.Object({
   mode: MessageMode,
   message: Type.String(),
   questionId: Type.Optional(Type.String({ description: "Optional stable id for the durable queue row." })),
-  thinking: Type.Optional(Type.String({ description: "For mode=consult: temporary clone thinking level. Defaults to xhigh." })),
-  timeoutMs: Type.Optional(Type.Number({ description: "For mode=consult: maximum runtime in milliseconds." })),
-  debug: Type.Optional(Type.Boolean({ description: "For mode=consult: keep temporary worktree/session for debugging." })),
 });
 
 export const ReplyParallelQuestionParams = Type.Object({
@@ -88,21 +81,21 @@ export const ReplyParallelQuestionParams = Type.Object({
   status: Type.Optional(ReplyStatus),
 });
 
-export interface LaunchParallelAgentsInput {
+export interface StartAgentInput {
   repoRoot?: string;
-  defaultProvider?: string;
-  defaultModel?: string;
-  defaultThinking?: string;
-  parentPrompt?: string;
-  agents: Array<{
-    name: string;
-    prompt: string;
-    workspaceMode?: "worktree" | "current";
-    accessMode?: "read_only" | "write";
-    provider?: string;
-    model?: string;
-    thinking?: string;
-  }>;
+  name?: string;
+  prompt: string;
+  dedicatedWorktree?: boolean;
+  inheritContext?: boolean;
+  systemPrompt?: string;
+  readOnly?: boolean;
+  singleResponse?: boolean;
+  maxSubAgents?: number;
+  provider?: string;
+  model?: string;
+  thinkingLevel?: string;
+  allowedTools?: string[];
+  keep?: boolean;
 }
 
 export interface GetParallelAgentsInput {
@@ -131,12 +124,9 @@ export interface ControlParallelAgentInput {
 export interface MessageParallelAgentInput {
   repoRoot?: string;
   agentId: string;
-  mode: "steer" | "queue" | "consult";
+  mode: "steer" | "queue";
   message: string;
   questionId?: string;
-  thinking?: string;
-  timeoutMs?: number;
-  debug?: boolean;
 }
 
 export interface ReplyParallelQuestionInput {

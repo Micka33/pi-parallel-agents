@@ -2,7 +2,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { agentsAskCommand } from "./agents-ask.js";
 import { agentsCleanCommand } from "./agents-clean.js";
 import { agentsCommand } from "./agents.js";
-import { agentsConsultCommand } from "./agents-consult.js";
 import { agentsDefaultsCommand } from "./agents-defaults.js";
 import { agentsOpenCommand } from "./agents-open.js";
 import { agentsOpenArgumentCompletions } from "./agents-open-completions.js";
@@ -69,12 +68,6 @@ export function registerParallelAgentCommands(pi: ExtensionAPI, options: Registe
     description: "Queue a durable follow-up message for a child agent: /agents-ask <agent-id> <message>",
     getArgumentCompletions: (argumentPrefix) => agentsOpenArgumentCompletions(argumentPrefix, options.getRepoRoot?.()),
     handler: agentsAskCommand,
-  });
-
-  pi.registerCommand("agents-consult", {
-    description: "Ask an isolated temporary clone without polluting the source agent: /agents-consult <agent-id> <question>",
-    getArgumentCompletions: (argumentPrefix) => agentsOpenArgumentCompletions(argumentPrefix, options.getRepoRoot?.()),
-    handler: agentsConsultCommand,
   });
 
   pi.registerCommand("agents-retry", {

@@ -10,13 +10,12 @@ import { initializeState, openStateDb, upsertAgent } from "../../scripts/lib/sta
 import { createQuestion, openQueueDb } from "../../scripts/lib/queue-db.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..");
-const fakePi = join(root, "tests", "fixtures", "fake-pi-rpc.mjs");
 const skipUnderCoverage = process.env.PI_PARALLEL_AGENTS_COVERAGE === "1"
   ? { skip: "child-process integration imports broad extension modules; covered by npm test, skipped for strict imported-module coverage" }
   : {};
 
 function createRepo() {
-  const parent = mkdtempSync(join(tmpdir(), "pa-v3-"));
+  const parent = mkdtempSync(join(tmpdir(), "pa-review-"));
   const repo = join(parent, "repo");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-b", "main"], { cwd: repo, stdio: "ignore" });
@@ -36,9 +35,9 @@ function tasksDb(repo) {
   return join(repo, ".pi", "parallel-agents", "tasks.sqlite");
 }
 
-function insertAgent({ repo, parent, agentId = "agent", workspaceMode = "worktree", accessMode, status = "waiting", summary = null, diffSummary = null }) {
-  const worktree = workspaceMode === "worktree" ? join(parent, "pi", agentId) : repo;
-  if (workspaceMode === "worktree") {
+function insertAgent({ repo, parent, agentId = "agent", dedicatedWorktree = true, readOnly, status = "waiting", summary = null, diffSummary = null }) {
+  const worktree = dedicatedWorktree ? join(parent, "pi", agentId) : repo;
+  if (dedicatedWorktree) {
     mkdirSync(join(parent, "pi"), { recursive: true });
     execFileSync("git", ["-C", repo, "worktree", "add", "-b", agentId, worktree, "HEAD"], { stdio: "ignore" });
   }
@@ -53,12 +52,12 @@ function insertAgent({ repo, parent, agentId = "agent", workspaceMode = "worktre
       display_name: agentId,
       repo_root: repo,
       status,
-      workspace_mode: workspaceMode,
-      access_mode: accessMode ?? (workspaceMode === "worktree" ? "write" : "read_only"),
+      dedicated_worktree: dedicatedWorktree ? 1 : 0,
+      read_only: (readOnly ?? !dedicatedWorktree) ? 1 : 0,
       pid: null,
       cwd: worktree,
-      worktree_path: workspaceMode === "worktree" ? worktree : null,
-      branch_name: workspaceMode === "worktree" ? agentId : null,
+      worktree_path: dedicatedWorktree ? worktree : null,
+      branch_name: dedicatedWorktree ? agentId : null,
       provider: "fake",
       model: "fake-model",
       thinking: "high",
@@ -92,10 +91,6 @@ function readRow(dbPath, sql, ...args) {
 }
 
 function childEnv(env = {}) {
-  // Keep the parent coverage gate focused on modules imported by the test
-  // process. These child processes are integration probes for the built
-  // extension surface and would otherwise drag broad command/tool graphs into
-  // V8 coverage accounting, so do not inherit Node's test-coverage env.
   return {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
@@ -170,14 +165,14 @@ test("retryBlockedQuestion requeues blocked outgoing messages and enqueues deliv
 test("review and overlay surface blocked questions, guardrails, and recommendations", skipUnderCoverage, () => {
   const { parent, repo } = createRepo();
   insertAgent({ repo, parent, agentId: "done-agent", summary: "implemented", diffSummary: "changed files" });
-  insertAgent({ repo, parent, agentId: "current-agent", workspaceMode: "current", accessMode: "write", status: "waiting" });
+  insertAgent({ repo, parent, agentId: "shared-agent", dedicatedWorktree: false, readOnly: true, status: "waiting" });
   queueQuestion(repo, { questionId: "blocked-review", agentId: "done-agent", direction: "outgoing", mode: "queue", status: "blocked", message: "retry me" });
-  queueQuestion(repo, { questionId: "incoming-review", agentId: "current-agent", direction: "incoming", mode: "reply", status: "queued", message: "answer me" });
+  queueQuestion(repo, { questionId: "incoming-review", agentId: "shared-agent", direction: "incoming", mode: "reply", status: "queued", message: "answer me" });
 
   const output = JSON.parse(
     runNode(`
       import { buildResultsReview } from ${JSON.stringify(distUrl(["review", "results-review.js"]))};
-      import { renderAgentsOverlay } from ${JSON.stringify(distUrl(["tui", "overlay.js"]))};
+      import { renderOverlay } from ${JSON.stringify(distUrl(["tui", "overlay.js"]))};
       const review = buildResultsReview(${JSON.stringify(repo)});
       const overlayAgents = review.agents.map((agent) => ({
         agentId: agent.agentId,
@@ -185,8 +180,14 @@ test("review and overlay surface blocked questions, guardrails, and recommendati
         parentSessionId: "parent",
         repoRoot: ${JSON.stringify(repo)},
         status: agent.status,
-        workspaceMode: agent.workspaceMode,
-        accessMode: agent.accessMode,
+        dedicatedWorktree: agent.dedicatedWorktree,
+        readOnly: agent.readOnly,
+        singleResponse: false,
+        inheritContext: false,
+        maxSubAgents: 0,
+        allowedTools: null,
+        systemPrompt: null,
+        requesterAgentId: null,
         pid: null,
         cwd: ${JSON.stringify(repo)},
         worktreePath: null,
@@ -204,8 +205,8 @@ test("review and overlay surface blocked questions, guardrails, and recommendati
         updatedAt: "now",
         queue: review.blockedQuestions.filter((question) => question.agent_id === agent.agentId),
       }));
-      overlayAgents.find((agent) => agent.agentId === "current-agent").queue.push({ question_id: "incoming-review", agent_id: "current-agent", direction: "incoming", mode: "reply", status: "queued", message: "answer me", response: null });
-      const overlay = renderAgentsOverlay(overlayAgents, ${JSON.stringify(repo)});
+      overlayAgents.find((agent) => agent.agentId === "shared-agent").queue.push({ question_id: "incoming-review", agent_id: "shared-agent", direction: "incoming", mode: "reply", status: "queued", message: "answer me", response: null });
+      const overlay = renderOverlay(${JSON.stringify(repo)}, overlayAgents);
       console.log(JSON.stringify({ review, overlay }));
     `),
   );
@@ -215,49 +216,37 @@ test("review and overlay surface blocked questions, guardrails, and recommendati
   assert.match(output.review.markdown, /Blocked questions/);
   assert.match(output.review.markdown, /blocked-review/);
   assert.ok(output.review.recommendations.some((item) => item.includes("Retry or cancel")));
-  assert.ok(output.review.recommendations.some((item) => item.includes("current\/write")));
-  assert.match(output.overlay, /agents-consult/);
-  assert.match(output.overlay, /Blocked questions/);
-  assert.match(output.overlay, /current-agent: current\/write shares the parent checkout/);
+  assert.match(output.overlay, /Blocked/);
+  assert.match(output.overlay, /Incoming questions/);
+  assert.match(output.overlay, /shared-agent: shared checkout \(read-only\)/);
 });
 
-test("slash commands wrap consult, retry, and review behavior", skipUnderCoverage, () => {
+test("slash commands wrap retry and review behavior", skipUnderCoverage, () => {
   const { parent, repo } = createRepo();
-  insertAgent({ repo, parent, agentId: "consult-agent" });
   insertAgent({ repo, parent, agentId: "retry-agent" });
   queueQuestion(repo, { questionId: "retry-from-command", agentId: "retry-agent", direction: "outgoing", mode: "steer", status: "blocked", message: "steer again" });
 
   const output = JSON.parse(
-    runNode(
-      `
-        import { agentsConsultCommand } from ${JSON.stringify(distUrl(["commands", "agents-consult.js"]))};
-        import { agentsRetryCommand } from ${JSON.stringify(distUrl(["commands", "agents-retry.js"]))};
-        import { agentsReviewCommand } from ${JSON.stringify(distUrl(["commands", "agents-review.js"]))};
-        const notifications = [];
-        const widgets = [];
-        const ctx = {
-          cwd: ${JSON.stringify(repo)},
-          ui: {
-            notify(message, level) { notifications.push({ message, level }); },
-            setWidget(key, value) { widgets.push({ key, value }); },
-          },
-        };
-        await agentsConsultCommand("consult-agent Can you inspect safely?", ctx);
-        await agentsRetryCommand("retry-agent retry-from-command", ctx);
-        await agentsReviewCommand("", ctx);
-        console.log(JSON.stringify({ notifications, widgets }));
-      `,
-      { PI_PARALLEL_AGENTS_PI_BIN: fakePi },
-    ),
+    runNode(`
+      import { agentsRetryCommand } from ${JSON.stringify(distUrl(["commands", "agents-retry.js"]))};
+      import { agentsReviewCommand } from ${JSON.stringify(distUrl(["commands", "agents-review.js"]))};
+      const notifications = [];
+      const widgets = [];
+      const ctx = {
+        cwd: ${JSON.stringify(repo)},
+        ui: {
+          notify(message, level) { notifications.push({ message, level }); },
+          setWidget(key, value) { widgets.push({ key, value }); },
+        },
+      };
+      await agentsRetryCommand("retry-agent retry-from-command", ctx);
+      await agentsReviewCommand("", ctx);
+      console.log(JSON.stringify({ notifications, widgets }));
+    `),
   );
 
-  assert.match(output.notifications.at(0).message, /fake done/);
-  assert.match(output.notifications.at(1).message, /retry_question/);
-  assert.match(output.notifications.at(2).message, /Parallel agents review/);
-  const consultRow = readRow(tasksDb(repo), "SELECT mode, status, response FROM parallel_questions WHERE agent_id = ? AND mode = 'consult'", "consult-agent");
-  assert.equal(consultRow.mode, "consult");
-  assert.equal(consultRow.status, "answered");
-  assert.equal(consultRow.response, "fake done");
+  assert.match(output.notifications.at(0).message, /retry_question/);
+  assert.match(output.notifications.at(1).message, /Parallel agents review/);
   const retried = readRow(tasksDb(repo), "SELECT status FROM parallel_questions WHERE question_id = ?", "retry-from-command");
   assert.equal(retried.status, "queued");
 });

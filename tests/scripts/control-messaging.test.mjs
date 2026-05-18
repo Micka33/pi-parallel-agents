@@ -11,10 +11,10 @@ const root = resolve(import.meta.dirname, "..", "..");
 const startScript = join(root, "scripts", "start-parallel-agent.sh");
 const stopScript = join(root, "scripts", "stop-parallel-agent.sh");
 const stateScript = join(root, "scripts", "parallel-agent-state.sh");
-const fakePi = join(root, "tests", "fixtures", "fake-pi-rpc.mjs");
+const fakePi = join(root, "tests", "fixtures", "fake-pi.mjs");
 
 function createRepo() {
-  const parent = mkdtempSync(join(tmpdir(), "pa-v2-"));
+  const parent = mkdtempSync(join(tmpdir(), "pa-control-"));
   const repo = join(parent, "repo");
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-b", "main"], { cwd: repo, stdio: "ignore" });
@@ -93,10 +93,10 @@ async function waitFor(fn, timeoutMs = 5000) {
   assert.fail("timed out waiting for condition");
 }
 
-test("stop-parallel-agent.sh stops an agent and resume starts a waiting RPC session", async () => {
+test("stop-parallel-agent.sh stops an agent and resume starts a waiting SDK session", async () => {
   const { repo } = createRepo();
-  const { contextPath, promptPath } = writeLaunchFiles(repo, { name: "control", workspaceMode: "current", agentPrompt: "Control me" });
-  const result = runStart(repo, ["--context", contextPath, "--prompt", promptPath, "--model", "fake-model", "--thinking", "high", "--workspace-mode", "current"]);
+  const { contextPath, promptPath } = writeLaunchFiles(repo, { name: "control", dedicatedWorktree: false, agentPrompt: "Control me" });
+  const result = runStart(repo, ["--context", contextPath, "--prompt", promptPath, "--model", "fake-model", "--thinking", "high"]);
 
   const stopped = JSON.parse(execFileSync(stopScript, ["--state-db", stateDb(repo), "--agent-id", result.agentId], { cwd: repo, encoding: "utf8" }));
   assert.equal(stopped.agent.status, "stopped");
@@ -115,8 +115,8 @@ test("stop-parallel-agent.sh stops an agent and resume starts a waiting RPC sess
 
 test("supervisor ignores fire-and-forget extension UI requests", async () => {
   const { repo } = createRepo();
-  const { contextPath, promptPath } = writeLaunchFiles(repo, { name: "fire-forget", workspaceMode: "current", agentPrompt: "FIRE_AND_FORGET_UI" });
-  const result = runStart(repo, ["--context", contextPath, "--prompt", promptPath, "--model", "fake-model", "--thinking", "high", "--workspace-mode", "current"]);
+  const { contextPath, promptPath } = writeLaunchFiles(repo, { name: "fire-forget", dedicatedWorktree: false, agentPrompt: "FIRE_AND_FORGET_UI" });
+  const result = runStart(repo, ["--context", contextPath, "--prompt", promptPath, "--model", "fake-model", "--thinking", "high"]);
 
   try {
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
@@ -127,17 +127,18 @@ test("supervisor ignores fire-and-forget extension UI requests", async () => {
   }
 });
 
-test("supervisor bridges extension_ui_request and extension_ui_response through durable questions", async () => {
+test("supervisor bridges queue-backed ExtensionUIContext questions through durable questions", async () => {
   const { repo } = createRepo();
-  const { contextPath, promptPath } = writeLaunchFiles(repo, { name: "bridge", workspaceMode: "current", agentPrompt: "ASK_UI" });
-  const result = runStart(repo, ["--context", contextPath, "--prompt", promptPath, "--model", "fake-model", "--thinking", "high", "--workspace-mode", "current"]);
+  const { contextPath, promptPath } = writeLaunchFiles(repo, { name: "bridge", dedicatedWorktree: false, agentPrompt: "ASK_UI" });
+  const result = runStart(repo, ["--context", contextPath, "--prompt", promptPath, "--model", "fake-model", "--thinking", "high"]);
 
   try {
     const incoming = await waitFor(() => readRow(tasksDb(repo), "SELECT * FROM parallel_questions WHERE question_id = ?", "ui-test"));
     assert.equal(incoming.direction, "incoming");
     assert.equal(incoming.status, "queued");
+    assert.equal(JSON.parse(incoming.metadata_json).transport, "ui_context");
 
-    const payload = JSON.stringify({ questionId: "ui-test", response: "answer", rpc: { type: "extension_ui_response", id: "ui-test", value: "answer" } });
+    const payload = JSON.stringify({ questionId: "ui-test", response: "answer", command: { type: "extension_ui_response", id: "ui-test", value: "answer" } });
     const enqueued = JSON.parse(
       execFileSync(
         stateScript,
@@ -158,10 +159,10 @@ test("supervisor bridges extension_ui_request and extension_ui_response through 
   }
 });
 
-test("supervisor delivers queued RPC commands and marks durable questions delivered", async () => {
+test("supervisor delivers queued SDK commands and marks durable questions delivered", async () => {
   const { repo } = createRepo();
-  const { contextPath, promptPath } = writeLaunchFiles(repo, { name: "messaging", workspaceMode: "current", agentPrompt: "Message me" });
-  const result = runStart(repo, ["--context", contextPath, "--prompt", promptPath, "--model", "fake-model", "--thinking", "high", "--workspace-mode", "current"]);
+  const { contextPath, promptPath } = writeLaunchFiles(repo, { name: "messaging", dedicatedWorktree: false, agentPrompt: "Message me" });
+  const result = runStart(repo, ["--context", contextPath, "--prompt", promptPath, "--model", "fake-model", "--thinking", "high"]);
 
   try {
     const qdb = openQueueDb(tasksDb(repo));
@@ -178,7 +179,7 @@ test("supervisor delivers queued RPC commands and marks durable questions delive
       qdb.close();
     }
 
-    const payload = JSON.stringify({ questionId: "q-test", rpc: { type: "follow_up", message: "Please continue" } });
+    const payload = JSON.stringify({ questionId: "q-test", command: { type: "follow_up", message: "Please continue" } });
     const enqueued = JSON.parse(
       execFileSync(
         stateScript,

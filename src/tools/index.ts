@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { launchParallelAgents } from "./launch-parallel-agents.js";
+import { startAgent } from "./start-agent.js";
 import { getParallelAgents } from "./get-parallel-agents.js";
 import { controlParallelAgent } from "./control-parallel-agent.js";
 import { messageParallelAgent } from "./message-parallel-agent.js";
@@ -7,30 +7,31 @@ import { replyParallelQuestion } from "./reply-parallel-question.js";
 import {
   ControlParallelAgentParams,
   GetParallelAgentsParams,
-  LaunchParallelAgentsParams,
+  StartAgentParams,
   MessageParallelAgentParams,
   ReplyParallelQuestionParams,
   type ControlParallelAgentInput,
   type GetParallelAgentsInput,
-  type LaunchParallelAgentsInput,
+  type StartAgentInput,
   type MessageParallelAgentInput,
   type ReplyParallelQuestionInput,
 } from "./schemas.js";
 
 export function registerParallelAgentTools(pi: ExtensionAPI): void {
   pi.registerTool({
-    name: "launch_parallel_agents",
-    label: "Launch Parallel Agents",
-    description: "Launch one or more Pi sub-agents in parallel workspaces and persist their state.",
-    promptSnippet: "Launch multiple Pi sub-agents with isolated worktrees or read-only current workspace mode.",
+    name: "start_agent",
+    label: "Start Agent",
+    description: "Create a Pi sub-agent with SDK sessions. Use options for worktree isolation, read-only policy, single response, sub-agent quota, model, thinking, and tools.",
+    promptSnippet: "Create a child Pi sub-agent with SDK sessions and explicit options.",
     promptGuidelines: [
-      "Use launch_parallel_agents when the user asks to split work across multiple agents in parallel.",
-      "For analysis-only agents in the current checkout, set workspaceMode to current; it defaults to read_only.",
+      "Use start_agent as the only creation primitive for sub-agents.",
+      "For a one-shot question, set dedicatedWorktree=true, readOnly=true, singleResponse=true.",
+      "Default maxSubAgents is 0; increase it only when the child is explicitly allowed to start direct children.",
     ],
-    parameters: LaunchParallelAgentsParams,
+    parameters: StartAgentParams,
     async execute(_toolCallId, params, _signal, onUpdate, ctx) {
-      onUpdate?.({ content: [{ type: "text", text: "Launching parallel agents..." }], details: {} });
-      const output = await launchParallelAgents(params as LaunchParallelAgentsInput, ctx);
+      onUpdate?.({ content: [{ type: "text", text: "Starting sub-agent..." }], details: {} });
+      const output = await startAgent(params as StartAgentInput, ctx, pi.getActiveTools(), pi.getThinkingLevel());
       return jsonResult(output);
     },
   });
@@ -38,9 +39,9 @@ export function registerParallelAgentTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "get_parallel_agents",
     label: "Get Parallel Agents",
-    description: "Read persisted parallel-agent status, sessions, workspaces, summaries, and events.",
-    promptSnippet: "Inspect sub-agent status, workspaces, model/thinking, sessions, and summaries.",
-    promptGuidelines: ["Use get_parallel_agents before summarizing or coordinating existing parallel sub-agents."],
+    description: "Read persisted parallel-agent status, sessions, worktrees, summaries, and events.",
+    promptSnippet: "Inspect sub-agent status, worktrees, model/thinking, sessions, and summaries.",
+    promptGuidelines: ["Use get_parallel_agents before summarizing or coordinating existing sub-agents."],
     parameters: GetParallelAgentsParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const output = getParallelAgents(params as GetParallelAgentsInput, ctx);
@@ -64,9 +65,9 @@ export function registerParallelAgentTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "message_parallel_agent",
     label: "Message Parallel Agent",
-    description: "Send steering, durable queued messages, or isolated consultations to a parallel child Pi agent.",
-    promptSnippet: "Send a steer, queue, or consult message to an existing parallel child agent.",
-    promptGuidelines: ["Use mode=steer for immediate guidance; use mode=queue for durable follow-up work.", "Use mode=consult only for worktree agents when the question must not pollute the source child context."],
+    description: "Send steering or durable queued messages to an existing child Pi agent.",
+    promptSnippet: "Send a steer or queue message to an existing child agent.",
+    promptGuidelines: ["Use mode=steer for immediate guidance; use mode=queue for durable follow-up work.", "Use start_agent with singleResponse=true for one-shot questions instead of message_parallel_agent."],
     parameters: MessageParallelAgentParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const output = await messageParallelAgent(params as MessageParallelAgentInput, ctx);
@@ -78,7 +79,7 @@ export function registerParallelAgentTools(pi: ExtensionAPI): void {
     name: "reply_parallel_question",
     label: "Reply Parallel Question",
     description: "Answer a durable question raised by a parallel child Pi agent.",
-    promptSnippet: "Reply to an incoming parallel-agent UI question by questionId.",
+    promptSnippet: "Reply to an incoming parallel-agent question by questionId.",
     promptGuidelines: ["Inspect get_parallel_agents include=['queues'] to find incoming questions before replying."],
     parameters: ReplyParallelQuestionParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

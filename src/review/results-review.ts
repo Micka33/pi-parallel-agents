@@ -14,8 +14,8 @@ export interface ResultsReview {
     agentId: string;
     displayName: string;
     status: string;
-    workspaceMode: string;
-    accessMode: string;
+    dedicatedWorktree: boolean;
+    readOnly: boolean;
     summary: string | null;
     diffSummary: string | null;
     testsJson: string | null;
@@ -59,8 +59,8 @@ function summarizeAgent(agent: ParallelAgent): ResultsReview["agents"][number] {
     agentId: agent.agentId,
     displayName: agent.displayName,
     status: agent.status,
-    workspaceMode: agent.workspaceMode,
-    accessMode: agent.accessMode,
+    dedicatedWorktree: agent.dedicatedWorktree,
+    readOnly: agent.readOnly,
     summary: agent.summary,
     diffSummary: agent.diffSummary,
     testsJson: agent.testsJson,
@@ -78,8 +78,8 @@ function buildRecommendations(agents: ParallelAgent[], blockedQuestions: QueueQu
   if (waitingWithoutSummary.length) recommendations.push(`Ask ${waitingWithoutSummary.length} idle agent(s) for a final summary, then mark them done.`);
   const running = agents.filter((agent) => agent.status === "running" || agent.status === "starting");
   if (running.length) recommendations.push(`Wait for ${running.length} active agent(s) or inspect them with /agents-open.`);
-  const currentWrite = agents.filter((agent) => agent.workspaceMode === "current" && agent.accessMode === "write");
-  if (currentWrite.length) recommendations.push("Audit current/write agents carefully: they share the parent checkout.");
+  const sharedWrite = agents.filter((agent) => !agent.dedicatedWorktree && !agent.readOnly);
+  if (sharedWrite.length) recommendations.push("Audit shared-checkout write-capable agents carefully.");
   const doneWithDiff = agents.filter((agent) => agent.status === "done" && agent.diffSummary);
   if (doneWithDiff.length) recommendations.push(`Review diff summaries from ${doneWithDiff.length} completed agent(s) before merging.`);
   if (!recommendations.length) recommendations.push("No immediate follow-up detected. Review summaries and tests, then clean evidence when no longer needed.");
@@ -104,8 +104,9 @@ function renderReviewMarkdown(
   ];
 
   for (const agent of agents) {
+    const isolation = `${agent.dedicatedWorktree ? "worktree" : "shared"}/${agent.readOnly ? "read-only" : "write"}`;
     lines.push(
-      `- ${agent.displayName} (${agent.agentId}): ${agent.status}, ${agent.workspaceMode}/${agent.accessMode}`,
+      `- ${agent.displayName} (${agent.agentId}): ${agent.status}, ${isolation}`,
       `  - summary: ${agent.summary ?? "none"}`,
       `  - diff: ${agent.diffSummary ?? "none"}`,
       `  - tests: ${agent.testsJson ?? "none"}`,

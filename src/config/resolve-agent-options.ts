@@ -1,17 +1,24 @@
-import type { AccessMode, WorkspaceMode } from "../constants.js";
 import type { ParallelAgentDefaults } from "./defaults.js";
 
-export interface LaunchAgentSpec {
-  name: string;
+const READ_ONLY_REJECTED_TOOLS = new Set(["bash", "edit", "write"]);
+
+export interface StartAgentSpec {
+  name?: string;
   prompt: string;
-  workspaceMode?: WorkspaceMode;
-  accessMode?: AccessMode;
+  dedicatedWorktree?: boolean;
+  inheritContext?: boolean;
+  systemPrompt?: string;
+  readOnly?: boolean;
+  singleResponse?: boolean;
+  maxSubAgents?: number;
   provider?: string;
   model?: string;
-  thinking?: string;
+  thinkingLevel?: string;
+  allowedTools?: string[];
+  keep?: boolean;
 }
 
-export interface LaunchDefaultsInput {
+export interface StartDefaultsInput {
   defaultProvider?: string;
   defaultModel?: string;
   defaultThinking?: string;
@@ -20,46 +27,91 @@ export interface LaunchDefaultsInput {
 export interface ParentModelDefaults {
   provider?: string;
   model?: string;
+  thinkingLevel?: string;
 }
 
 export interface ResolvedAgentOptions {
   name: string;
   prompt: string;
-  workspaceMode: WorkspaceMode;
-  accessMode: AccessMode;
-  provider?: string;
+  dedicatedWorktree: boolean;
+  inheritContext: boolean;
+  readOnly: boolean;
+  singleResponse: boolean;
+  maxSubAgents: number;
+  keep: boolean;
   model: string;
   thinking: string;
+  thinkingLevel: string;
+  provider?: string;
+  systemPrompt?: string;
+  allowedTools?: string[];
 }
 
-export function resolveAgentOptions(
-  spec: LaunchAgentSpec,
-  launch: LaunchDefaultsInput,
+export function resolveStartAgentOptions(
+  spec: StartAgentSpec,
+  defaults: StartDefaultsInput,
   configuredDefaults: ParallelAgentDefaults,
   parentModel: ParentModelDefaults = {},
 ): ResolvedAgentOptions {
-  const workspaceMode = spec.workspaceMode ?? "worktree";
-  if (workspaceMode !== "worktree" && workspaceMode !== "current") {
-    throw new Error(`Invalid workspaceMode for ${spec.name}: ${workspaceMode}`);
+  if (!spec.prompt?.trim()) throw new Error("start_agent requires a non-empty prompt");
+
+  const dedicatedWorktree = spec.dedicatedWorktree ?? true;
+  const readOnly = spec.readOnly ?? !dedicatedWorktree;
+  const singleResponse = spec.singleResponse ?? false;
+  const inheritContext = spec.inheritContext ?? false;
+  const maxSubAgents = spec.maxSubAgents ?? 0;
+  if (!Number.isInteger(maxSubAgents) || maxSubAgents < 0) throw new Error(`maxSubAgents must be a non-negative integer; got ${spec.maxSubAgents}`);
+  if (!dedicatedWorktree && !readOnly) {
+    throw new Error("dedicatedWorktree=false with readOnly=false is blocked by parallel-agents guardrails; use a dedicated worktree for write access.");
   }
 
-  const accessMode = spec.accessMode ?? (workspaceMode === "current" ? "read_only" : "write");
-  if (accessMode !== "read_only" && accessMode !== "write") {
-    throw new Error(`Invalid accessMode for ${spec.name}: ${accessMode}`);
-  }
-  if (workspaceMode === "current" && accessMode === "write") {
-    throw new Error(`current/write is blocked by parallel-agents guardrails for agent ${spec.name}; use a worktree or read_only.`);
-  }
+  const allowedTools = normalizeAllowedTools(spec.allowedTools);
+  if (readOnly) assertReadOnlyAllowedTools(allowedTools);
 
-  const provider = spec.provider ?? launch.defaultProvider ?? parentModel.provider;
+  const provider = spec.provider ?? defaults.defaultProvider ?? parentModel.provider;
+  const thinkingLevel = spec.thinkingLevel ?? defaults.defaultThinking ?? parentModel.thinkingLevel ?? configuredDefaults.thinking;
 
-  return {
-    name: spec.name,
+  return compactOptions({
+    name: safeName(spec.name ?? "agent"),
     prompt: spec.prompt,
-    workspaceMode,
-    accessMode,
+    dedicatedWorktree,
+    inheritContext,
+    readOnly,
+    singleResponse,
+    maxSubAgents,
+    keep: spec.keep ?? false,
     ...(provider ? { provider } : {}),
-    model: spec.model ?? launch.defaultModel ?? parentModel.model ?? configuredDefaults.model,
-    thinking: spec.thinking ?? launch.defaultThinking ?? configuredDefaults.thinking,
-  };
+    model: spec.model ?? defaults.defaultModel ?? parentModel.model ?? configuredDefaults.model,
+    thinking: thinkingLevel,
+    thinkingLevel,
+    ...(spec.systemPrompt ? { systemPrompt: spec.systemPrompt } : {}),
+    ...(allowedTools ? { allowedTools } : {}),
+  });
+}
+
+function normalizeAllowedTools(tools: string[] | undefined): string[] | undefined {
+  if (!tools) return undefined;
+  const normalized = tools.map((tool) => tool.trim()).filter(Boolean);
+  return Array.from(new Set(normalized));
+}
+
+function assertReadOnlyAllowedTools(tools: string[] | undefined): void {
+  const rejected = tools?.filter((tool) => READ_ONLY_REJECTED_TOOLS.has(tool)) ?? [];
+  if (rejected.length > 0) {
+    throw new Error(`readOnly=true cannot explicitly allow mutating tools: ${rejected.join(", ")}`);
+  }
+}
+
+function safeName(input: string): string {
+  return input.trim().replace(/\s+/g, " ").slice(0, 80) || "agent";
+}
+
+function compactOptions(options: ResolvedAgentOptions): ResolvedAgentOptions {
+  const metadataKeys = ["dedicatedWorktree", "inheritContext", "readOnly", "singleResponse", "maxSubAgents", "keep", "thinkingLevel", "systemPrompt", "allowedTools"] as const;
+  for (const key of metadataKeys) {
+    if (Object.prototype.hasOwnProperty.call(options, key)) {
+      Object.defineProperty(options, key, { value: options[key], enumerable: false, writable: true, configurable: true });
+    }
+  }
+  return options;
 }

@@ -36,20 +36,20 @@ function ensureParallelQuestionsTable(db) {
     createParallelQuestionsTable(db, "parallel_questions");
     return;
   }
-  if (String(existing.sql ?? "").includes("'consult'")) return;
+  if (String(existing.sql ?? "").includes("mode IN ('steer', 'queue', 'reply')")) return;
 
   db.exec("BEGIN IMMEDIATE");
   try {
     db.exec("DROP INDEX IF EXISTS idx_parallel_questions_agent_status");
     db.exec("DROP INDEX IF EXISTS idx_parallel_questions_direction");
-    createParallelQuestionsTable(db, "parallel_questions_v3");
+    createParallelQuestionsTable(db, "parallel_questions_rebuilt");
     db.exec(`
-INSERT INTO parallel_questions_v3
+INSERT INTO parallel_questions_rebuilt
   (question_id, agent_id, direction, mode, status, message, response, metadata_json, created_at, updated_at, delivered_at, answered_at)
-SELECT question_id, agent_id, direction, mode, status, message, response, metadata_json, created_at, updated_at, delivered_at, answered_at
+SELECT question_id, agent_id, direction, CASE WHEN mode IN ('steer', 'queue', 'reply') THEN mode ELSE 'queue' END, status, message, response, metadata_json, created_at, updated_at, delivered_at, answered_at
 FROM parallel_questions;
 DROP TABLE parallel_questions;
-ALTER TABLE parallel_questions_v3 RENAME TO parallel_questions;
+ALTER TABLE parallel_questions_rebuilt RENAME TO parallel_questions;
 `);
     db.exec("COMMIT");
   } catch (error) {
@@ -66,7 +66,7 @@ CREATE TABLE ${tableName} (
   question_id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL,
   direction TEXT NOT NULL CHECK (direction IN ('incoming', 'outgoing')),
-  mode TEXT NOT NULL CHECK (mode IN ('steer', 'queue', 'reply', 'consult')),
+  mode TEXT NOT NULL CHECK (mode IN ('steer', 'queue', 'reply')),
   status TEXT NOT NULL CHECK (status IN ('queued', 'delivered', 'answered', 'done', 'blocked', 'canceled')),
   message TEXT NOT NULL,
   response TEXT,

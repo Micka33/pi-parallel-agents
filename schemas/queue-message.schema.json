@@ -8,7 +8,7 @@
     "question_id": { "type": "string" },
     "agent_id": { "type": "string" },
     "direction": { "enum": ["incoming", "outgoing"] },
-    "mode": { "enum": ["steer", "queue", "reply", "consult"] },
+    "mode": { "enum": ["steer", "queue", "reply"] },
     "status": { "enum": ["queued", "delivered", "answered", "done", "blocked", "canceled"] },
     "message": { "type": "string" },
     "response": { "type": ["string", "null"] },

@@ -40,19 +40,21 @@ export function agentsOpenArgumentCompletions(argumentPrefix: string, repoRoot: 
 
 function matchesAgent(row: AgentStateRow, query: string): boolean {
   if (!query) return true;
-  const haystack = [row.agent_id, row.display_name, row.status, row.workspace_mode, row.model ?? "", row.thinking ?? ""]
+  const isolation = row.dedicated_worktree ? "worktree" : "shared";
+  const access = row.read_only ? "read-only" : "write";
+  const haystack = [row.agent_id, row.display_name, row.status, isolation, access, row.model ?? "", row.thinking ?? ""]
     .join(" ")
     .toLowerCase();
   return haystack.includes(query);
 }
 
 function agentCompletionItem(row: AgentStateRow): AutocompleteItem {
-  const workspace = row.workspace_mode === "current" ? "current/read-only" : "worktree";
+  const isolation = `${row.dedicated_worktree ? "worktree" : "shared"}/${row.read_only ? "read-only" : "write"}`;
   const modelThinking = `${row.model ?? "?"}/${row.thinking ?? "?"}`;
   return {
     value: row.agent_id,
     label: row.display_name === row.agent_id ? row.agent_id : `${row.display_name} (${row.agent_id})`,
-    description: `${statusGlyph(row.status)} ${row.status} · ${workspace} · ${modelThinking}`,
+    description: `${statusGlyph(row.status)} ${row.status} · ${isolation} · ${modelThinking}`,
   };
 }
 
@@ -61,4 +63,3 @@ function compareAgentsForCompletion(left: AgentStateRow, right: AgentStateRow): 
   if (byStatus !== 0) return byStatus;
   return right.updated_at.localeCompare(left.updated_at) || left.agent_id.localeCompare(right.agent_id);
 }
-

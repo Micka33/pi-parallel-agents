@@ -10,6 +10,8 @@ export interface StartAgentSpec {
   systemPrompt?: string;
   readOnly?: boolean;
   singleResponse?: boolean;
+  waitUntil?: "started" | "initial_response";
+  waitTimeoutMs?: number;
   maxSubAgents?: number;
   provider?: string;
   model?: string;
@@ -37,6 +39,8 @@ export interface ResolvedAgentOptions {
   inheritContext: boolean;
   readOnly: boolean;
   singleResponse: boolean;
+  waitUntil: "started" | "initial_response";
+  waitTimeoutMs?: number;
   maxSubAgents: number;
   keep: boolean;
   model: string;
@@ -58,8 +62,13 @@ export function resolveStartAgentOptions(
   const dedicatedWorktree = spec.dedicatedWorktree ?? true;
   const readOnly = spec.readOnly ?? !dedicatedWorktree;
   const singleResponse = spec.singleResponse ?? false;
+  const waitUntil = spec.waitUntil ?? (singleResponse ? "initial_response" : "started");
+  const waitTimeoutMs = spec.waitTimeoutMs;
   const inheritContext = spec.inheritContext ?? false;
   const maxSubAgents = spec.maxSubAgents ?? 0;
+  if (waitUntil !== "started" && waitUntil !== "initial_response") throw new Error(`waitUntil must be 'started' or 'initial_response'; got ${spec.waitUntil}`);
+  if (singleResponse && spec.waitUntil === "started") throw new Error("singleResponse=true always waits for the response; omit waitUntil or use waitUntil='initial_response'.");
+  if (waitTimeoutMs !== undefined && (!Number.isInteger(waitTimeoutMs) || waitTimeoutMs < 1)) throw new Error(`waitTimeoutMs must be a positive integer; got ${spec.waitTimeoutMs}`);
   if (!Number.isInteger(maxSubAgents) || maxSubAgents < 0) throw new Error(`maxSubAgents must be a non-negative integer; got ${spec.maxSubAgents}`);
   if (!dedicatedWorktree && !readOnly) {
     throw new Error("dedicatedWorktree=false with readOnly=false is blocked by parallel-agents guardrails; use a dedicated worktree for write access.");
@@ -78,6 +87,8 @@ export function resolveStartAgentOptions(
     inheritContext,
     readOnly,
     singleResponse,
+    waitUntil,
+    ...(waitTimeoutMs !== undefined ? { waitTimeoutMs } : {}),
     maxSubAgents,
     keep: spec.keep ?? false,
     ...(provider ? { provider } : {}),
@@ -107,7 +118,7 @@ function safeName(input: string): string {
 }
 
 function compactOptions(options: ResolvedAgentOptions): ResolvedAgentOptions {
-  const metadataKeys = ["dedicatedWorktree", "inheritContext", "readOnly", "singleResponse", "maxSubAgents", "keep", "thinkingLevel", "systemPrompt", "allowedTools"] as const;
+  const metadataKeys = ["dedicatedWorktree", "inheritContext", "readOnly", "singleResponse", "waitUntil", "waitTimeoutMs", "maxSubAgents", "keep", "thinkingLevel", "systemPrompt", "allowedTools"] as const;
   for (const key of metadataKeys) {
     if (Object.prototype.hasOwnProperty.call(options, key)) {
       Object.defineProperty(options, key, { value: options[key], enumerable: false, writable: true, configurable: true });

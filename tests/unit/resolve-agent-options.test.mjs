@@ -54,3 +54,15 @@ test("resolveStartAgentOptions honors per-agent overrides over start defaults an
   assert.equal(resolved.maxSubAgents, 1);
   assert.deepEqual(resolved.allowedTools, ["read", "grep"]);
 });
+
+test("resolveStartAgentOptions supports waiting for a persistent initial response", () => {
+  const resolved = resolveStartAgentOptions(
+    { name: "child", prompt: "task", waitUntil: "initial_response", waitTimeoutMs: 5000 },
+    {},
+    configuredDefaults,
+  );
+
+  assert.equal(resolved.singleResponse, false);
+  assert.equal(resolved.waitUntil, "initial_response");
+  assert.equal(resolved.waitTimeoutMs, 5000);
+});

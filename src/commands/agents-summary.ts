@@ -1,12 +1,12 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { getParallelAgents } from "../tools/get-parallel-agents.js";
+import { getParallelAgentDetails } from "../tools/get-parallel-agent-details.js";
 import { resolveRepoRoot } from "../util/paths.js";
 import { renderAgentsSummary } from "../tui/render-agents.js";
 
 export async function agentsSummaryCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
   const repoRoot = resolveRepoRoot(ctx.cwd);
   const includeCleaned = shouldIncludeCleaned(args);
-  const { agents } = getParallelAgents({ include: ["status", "summary", "results", "queues"] }, ctx);
+  const { agents } = getParallelAgentDetails({ include: ["status", "summary", "results", "queues"] }, ctx);
   const visibleAgents = includeCleaned ? agents : agents.filter((agent) => agent.status !== "cleaned");
   if (visibleAgents.length === 0) {
     const cleanedCount = agents.filter((agent) => agent.status === "cleaned").length;

@@ -43,6 +43,7 @@ test("resolveStartAgentOptions covers SDK-first defaults, hidden metadata, and v
   assert.equal(resolved.dedicatedWorktree, false);
   assert.equal(resolved.readOnly, true);
   assert.equal(resolved.singleResponse, true);
+  assert.equal(resolved.waitUntil, "initial_response");
   assert.equal(resolved.maxSubAgents, 2);
   assert.equal(resolved.keep, true);
   assert.equal(resolved.thinkingLevel, "low");
@@ -93,5 +94,8 @@ test("resolveStartAgentOptions covers SDK-first defaults, hidden metadata, and v
 
   assert.throws(() => resolveStartAgentOptions({}, {}, configuredDefaults), /non-empty prompt/);
   assert.throws(() => resolveStartAgentOptions({ prompt: "task", maxSubAgents: 1.2 }, {}, configuredDefaults), /maxSubAgents/);
+  assert.throws(() => resolveStartAgentOptions({ prompt: "task", waitUntil: "done" }, {}, configuredDefaults), /waitUntil/);
+  assert.throws(() => resolveStartAgentOptions({ prompt: "task", waitUntil: "initial_response", waitTimeoutMs: 0 }, {}, configuredDefaults), /waitTimeoutMs/);
+  assert.throws(() => resolveStartAgentOptions({ prompt: "task", singleResponse: true, waitUntil: "started" }, {}, configuredDefaults), /singleResponse=true/);
   assert.throws(() => resolveStartAgentOptions({ prompt: "task", readOnly: true, allowedTools: ["read", "edit"] }, {}, configuredDefaults), /mutating tools: edit/);
 });

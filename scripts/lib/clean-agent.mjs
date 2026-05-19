@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { appendEvent, getAgent, openStateDb, setAgentStatus } from "./state-db.mjs";
 
+const ACTIVE_STATUSES = new Set(["starting", "running", "waiting"]);
+
 function main() {
   const { options } = parseArgs(process.argv.slice(2));
   const stateDb = required(options, "state-db");
@@ -18,9 +20,19 @@ function main() {
   try {
     const agent = getAgent(db, agentId);
     if (!agent) throw new Error(`Unknown agent: ${agentId}`);
-    if (agent.pid && isPidAlive(Number(agent.pid))) throw new Error(`Agent ${agentId} is still running; stop it before clean`);
 
     const actions = [];
+    if (agent.pid && isPidAlive(Number(agent.pid))) {
+      if (ACTIVE_STATUSES.has(agent.status)) {
+        throw new Error(`Agent ${agentId} is still ${agent.status}; run /agents-stop ${agentId} before clean`);
+      }
+      const stopped = stopPid(Number(agent.pid), 1000);
+      actions.push({ type: "worker_stopped", pid: Number(agent.pid), previousStatus: agent.status, stopped });
+      if (!stopped && isPidAlive(Number(agent.pid))) {
+        throw new Error(`Agent ${agentId} is marked ${agent.status}, but worker process ${agent.pid} is still alive; run /agents-stop ${agentId} before clean`);
+      }
+    }
+
     if (removeWorktree && agent.worktree_path) {
       assertCleanWorktree(agent.worktree_path, force);
       const result = spawnSync("git", ["-C", agent.repo_root, "worktree", "remove", agent.worktree_path, ...(force ? ["--force"] : [])], { encoding: "utf8" });
@@ -56,6 +68,31 @@ function assertCleanWorktree(path, force) {
   const result = spawnSync("git", ["-C", path, "status", "--porcelain"], { encoding: "utf8" });
   if (result.status !== 0) throw new Error(`Could not inspect worktree status: ${result.stderr || result.stdout}`);
   if (result.stdout.trim()) throw new Error(`Refusing to remove dirty worktree ${path}; pass force=true to override`);
+}
+
+function stopPid(pid, timeoutMs) {
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return true;
+  }
+  if (waitUntilDead(pid, timeoutMs)) return true;
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    return true;
+  }
+  waitUntilDead(pid, 1000);
+  return true;
+}
+
+function waitUntilDead(pid, timeoutMs) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (!isPidAlive(pid)) return true;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+  }
+  return !isPidAlive(pid);
 }
 
 function isPidAlive(pid) {
@@ -94,4 +131,9 @@ function required(options, key) {
   return String(value);
 }
 
-main();
+try {
+  main();
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exit(1);
+}

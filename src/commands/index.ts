@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { agentsAskCommand } from "./agents-ask.js";
 import { agentsCleanCommand } from "./agents-clean.js";
+import { agentsCleanArgumentCompletions } from "./agents-clean-completions.js";
 import { agentsCommand } from "./agents.js";
 import { agentsDefaultsCommand } from "./agents-defaults.js";
 import { agentsOpenCommand } from "./agents-open.js";
@@ -54,7 +55,7 @@ export function registerParallelAgentCommands(pi: ExtensionAPI, options: Registe
 
   pi.registerCommand("agents-clean", {
     description: "Clean a stopped parallel Pi sub-agent: /agents-clean <agent-id> [--worktree] [--branch] [--session] [--force]",
-    getArgumentCompletions: (argumentPrefix) => agentsOpenArgumentCompletions(argumentPrefix, options.getRepoRoot?.()),
+    getArgumentCompletions: (argumentPrefix) => agentsCleanArgumentCompletions(argumentPrefix, options.getRepoRoot?.()),
     handler: agentsCleanCommand,
   });
 

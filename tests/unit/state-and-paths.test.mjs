@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { statusGlyph, toParallelAgent } from "../../dist/src/state/selectors.js";
 import { StateReader } from "../../dist/src/state/state-reader.js";
+import { getParallelAgents } from "../../dist/src/tools/get-parallel-agents.js";
 import { renderAgentDetails, renderAgentLine, renderAgentsList, renderAgentsSummary } from "../../dist/src/tui/render-agents.js";
 import { renderQueueLine, renderQueueList } from "../../dist/src/tui/render-queues.js";
 import { updateParallelAgentsWidget } from "../../dist/src/tui/widget.js";
@@ -326,6 +327,27 @@ test("StateReader covers missing and populated state reads", () => {
   assert.deepEqual(reader.readEvents("first", 4).map((row) => row.event_type), ["older", "newer", "command_queued", "command_queued"]);
   assert.equal(reader.readSettings().default_model, "configured");
   assert.equal(reader.readSettings().raw, "not-json");
+});
+
+test("getParallelAgents returns compact public rows only", () => {
+  const { repoRoot, db } = createStateDb();
+  try {
+    insertAgent(db, repoRoot, "first", {
+      display_name: "First Agent",
+      status: "running",
+      session_id: "session-1",
+      pid: 123,
+      summary: "hidden",
+      last_error: "hidden",
+    });
+  } finally {
+    db.close();
+  }
+
+  const result = getParallelAgents({ include: ["logs", "commands", "queues"] }, { cwd: repoRoot });
+  assert.deepEqual(result, [{ agentId: "first", displayName: "First Agent", sessionId: "session-1", status: "running" }]);
+  assert.deepEqual(Object.keys(result[0]).sort(), ["agentId", "displayName", "sessionId", "status"].sort());
+  assert.deepEqual(getParallelAgents({ repoRoot, agentId: "first" }, { cwd: "/unused" }), result);
 });
 
 test("widget omits cleaned agents and clears when no visible agents remain", () => {

@@ -24,6 +24,9 @@ const ControlAction = Type.Union([
 
 const MessageMode = Type.Union([Type.Literal("steer"), Type.Literal("queue")]);
 const ReplyStatus = Type.Union([Type.Literal("answered"), Type.Literal("done"), Type.Literal("blocked")]);
+const WaitUntil = Type.Union([Type.Literal("started"), Type.Literal("initial_response")], {
+  description: "For persistent children, block until this point. Defaults to 'started'. Use 'initial_response' to wait for the first answer while keeping the child alive.",
+});
 
 export const StartAgentParams = Type.Object({
   repoRoot: Type.Optional(Type.String({ description: "Git repo/workspace root to launch from. Defaults to this Pi session workspace." })),
@@ -34,6 +37,8 @@ export const StartAgentParams = Type.Object({
   systemPrompt: Type.Optional(Type.String({ description: "Optional extra system prompt text for the child session." })),
   readOnly: Type.Optional(Type.Boolean({ description: "Restrict actual SDK tool list to read-only-safe tools. Defaults to !dedicatedWorktree." })),
   singleResponse: Type.Optional(Type.Boolean({ description: "Return one completed response and automatically dispose/clean the child. Defaults to false." })),
+  waitUntil: Type.Optional(WaitUntil),
+  waitTimeoutMs: Type.Optional(Type.Number({ minimum: 1, multipleOf: 1, description: "Maximum time to wait for waitUntil='initial_response'. On timeout, the child keeps running and the tool returns a timeout wait status." })),
   maxSubAgents: Type.Optional(NonNegativeInteger),
   provider: Type.Optional(Type.String({ description: "Provider override. Defaults to requesting session provider." })),
   model: Type.Optional(Type.String({ description: "Model override. Defaults to requesting session model, then configured default." })),
@@ -45,7 +50,7 @@ export const StartAgentParams = Type.Object({
 export const GetParallelAgentsParams = Type.Object({
   repoRoot: Type.Optional(Type.String({ description: "Git repo/workspace root whose parallel-agent state should be read. Defaults to this Pi session workspace." })),
   agentId: Type.Optional(Type.String()),
-  include: Type.Optional(Type.Array(IncludeItem)),
+  include: Type.Optional(Type.Array(IncludeItem, { description: "Deprecated compatibility option; get_parallel_agents always returns compact rows." })),
 });
 
 export const ControlParallelAgentParams = Type.Object({
@@ -90,6 +95,8 @@ export interface StartAgentInput {
   systemPrompt?: string;
   readOnly?: boolean;
   singleResponse?: boolean;
+  waitUntil?: "started" | "initial_response";
+  waitTimeoutMs?: number;
   maxSubAgents?: number;
   provider?: string;
   model?: string;

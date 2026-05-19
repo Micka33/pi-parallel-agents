@@ -1,28 +1,67 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ParallelAgentStartResult",
-  "type": "object",
-  "required": ["agentId", "displayName", "cwd", "model", "thinking", "status", "dedicatedWorktree", "readOnly", "singleResponse", "maxSubAgents"],
-  "properties": {
-    "agentId": { "type": "string" },
-    "displayName": { "type": "string" },
-    "pid": { "type": ["integer", "null"] },
-    "dedicatedWorktree": { "type": "boolean" },
-    "readOnly": { "type": "boolean" },
-    "singleResponse": { "type": "boolean" },
-    "inheritContext": { "type": "boolean" },
-    "maxSubAgents": { "type": "integer", "minimum": 0 },
-    "allowedTools": { "type": ["array", "null"], "items": { "type": "string" } },
-    "requesterAgentId": { "type": ["string", "null"] },
-    "cwd": { "type": "string" },
-    "provider": { "type": ["string", "null"] },
-    "model": { "type": "string" },
-    "thinking": { "type": "string" },
-    "branchName": { "type": ["string", "null"] },
-    "worktreePath": { "type": ["string", "null"] },
-    "sessionId": { "type": ["string", "null"] },
-    "sessionFile": { "type": ["string", "null"] },
-    "status": { "enum": ["starting", "running", "waiting", "stopped", "crashed", "done", "cleaned"] }
-  },
-  "additionalProperties": false
+  "oneOf": [
+    { "$ref": "#/$defs/agent" },
+    {
+      "type": "object",
+      "required": ["agent", "answer", "wait"],
+      "properties": {
+        "agent": { "$ref": "#/$defs/agent" },
+        "answer": { "type": "string" },
+        "wait": {
+          "type": "object",
+          "required": ["until", "status"],
+          "properties": {
+            "until": { "const": "initial_response" },
+            "status": { "enum": ["completed", "timeout", "question"] },
+            "timeoutMs": { "type": "integer", "minimum": 1 },
+            "question": {
+              "type": "object",
+              "required": ["questionId", "agentId", "direction", "mode", "status", "message"],
+              "properties": {
+                "questionId": { "type": "string" },
+                "agentId": { "type": "string" },
+                "direction": { "type": "string" },
+                "mode": { "type": "string" },
+                "status": { "type": "string" },
+                "message": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "agent": {
+      "type": "object",
+      "required": ["agentId", "displayName", "cwd", "model", "thinking", "status", "dedicatedWorktree", "readOnly", "singleResponse", "maxSubAgents"],
+      "properties": {
+        "agentId": { "type": "string" },
+        "displayName": { "type": "string" },
+        "pid": { "type": ["integer", "null"] },
+        "dedicatedWorktree": { "type": "boolean" },
+        "readOnly": { "type": "boolean" },
+        "singleResponse": { "type": "boolean" },
+        "inheritContext": { "type": "boolean" },
+        "maxSubAgents": { "type": "integer", "minimum": 0 },
+        "allowedTools": { "type": ["array", "null"], "items": { "type": "string" } },
+        "requesterAgentId": { "type": ["string", "null"] },
+        "cwd": { "type": "string" },
+        "provider": { "type": ["string", "null"] },
+        "model": { "type": "string" },
+        "thinking": { "type": "string" },
+        "branchName": { "type": ["string", "null"] },
+        "worktreePath": { "type": ["string", "null"] },
+        "sessionId": { "type": ["string", "null"] },
+        "sessionFile": { "type": ["string", "null"] },
+        "status": { "enum": ["starting", "running", "waiting", "stopped", "crashed", "done", "cleaned"] }
+      },
+      "additionalProperties": false
+    }
+  }
 }

@@ -15,7 +15,7 @@ import {
   setAgentStatus,
   upsertAgent,
 } from "./state-db.mjs";
-import { answerQuestion, createQuestion, getQuestion, markQuestionBlocked, markQuestionDelivered, openQueueDb } from "./queue-db.mjs";
+import { answerQuestion, createQuestion, getQuestion, listQuestions, markQuestionBlocked, markQuestionDelivered, openQueueDb } from "./queue-db.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -53,6 +53,8 @@ async function start() {
   if (dedicatedWorktree) assertGitRepository(repoRoot);
   const readOnly = boolOption(options["read-only"] ?? context.readOnly, !dedicatedWorktree);
   const singleResponse = boolOption(context.singleResponse, false);
+  const waitUntil = normalizeWaitUntil(context.waitUntil, singleResponse);
+  const waitTimeoutMs = positiveNumber(context.waitTimeoutMs);
   const inheritContext = boolOption(context.inheritContext, false);
   const inheritedSessionFile = inheritContext ? optionalString(context.inheritedSessionFile) : undefined;
   const inheritedSessionLeafId = inheritContext ? optionalString(context.inheritedSessionLeafId) : undefined;
@@ -134,7 +136,7 @@ async function start() {
     appendEvent(db, {
       agentId,
       eventType: "start_requested",
-      payloadJson: JSON.stringify({ dedicatedWorktree, readOnly, singleResponse, inheritContext, inheritedSessionLeafId: inheritedSessionLeafId ?? null, inheritedSessionFile: inheritedSessionFile ?? null, maxSubAgents, model, thinking, provider, cwd, worktreePath, branchName }),
+      payloadJson: JSON.stringify({ dedicatedWorktree, readOnly, singleResponse, waitUntil, waitTimeoutMs: waitTimeoutMs ?? null, inheritContext, inheritedSessionLeafId: inheritedSessionLeafId ?? null, inheritedSessionFile: inheritedSessionFile ?? null, maxSubAgents, model, thinking, provider, cwd, worktreePath, branchName }),
     });
 
     const configPath = join(runtimeDir, "tmp", `${agentId}-${Date.now()}-sdk-worker.json`);
@@ -152,6 +154,8 @@ async function start() {
       dedicatedWorktree,
       readOnly,
       singleResponse,
+      waitUntil,
+      waitTimeoutMs,
       inheritContext,
       inheritedSessionFile,
       inheritedSessionLeafId,
@@ -188,14 +192,15 @@ async function start() {
     });
     worker.unref();
 
-    const result = await waitForResultFile(resultFile, config.startTimeoutMs);
+    const result = await waitForResultFile(resultFile, startResultTimeoutMs(config));
     if (!result.ok) {
       const errorMessage = result.error?.message ?? JSON.stringify(result.error ?? result);
       setAgentStatus(db, { agentId, status: "crashed", pid: null, lastError: errorMessage });
       throw new Error(`Failed to start parallel agent ${agentId}: ${errorMessage}`);
     }
 
-    process.stdout.write(JSON.stringify(result.agent, null, 2) + "\n");
+    const output = result.wait ? { agent: result.agent, answer: result.answer ?? "", wait: result.wait } : result.agent;
+    process.stdout.write(JSON.stringify(output, null, 2) + "\n");
   } finally {
     db.close();
   }
@@ -212,7 +217,10 @@ async function startResume(options) {
     const existing = getAgent(db, agentId);
     if (!existing) throw new Error(`Unknown agent: ${agentId}`);
     if (existing.pid && isPidAlive(Number(existing.pid))) {
-      process.stdout.write(JSON.stringify(toStartResult(existing), null, 2) + "\n");
+      const agent = existing.status === "done" || existing.status === "stopped"
+        ? setAgentStatus(db, { agentId, status: "waiting", pid: Number(existing.pid), lastError: null })
+        : existing;
+      process.stdout.write(JSON.stringify(toStartResult(agent), null, 2) + "\n");
       return;
     }
 
@@ -387,6 +395,8 @@ async function superviseSdk(configPath) {
   let commandPollRunning = false;
   let promptPromise = null;
   let started = false;
+  let resultWritten = false;
+  let finalAnswer = "";
   let shuttingDown = false;
 
   const failStart = (error) => {
@@ -396,6 +406,7 @@ async function superviseSdk(configPath) {
       appendEvent(db, { agentId: config.agent.agent_id, eventType: "start_failed", payloadJson: JSON.stringify(serialized) });
     } catch {}
     writeResult(config.resultFile, { ok: false, error: serialized });
+    resultWritten = true;
   };
 
   const shutdown = async (reason) => {
@@ -446,6 +457,8 @@ async function superviseSdk(configPath) {
 
     session.subscribe((event) => {
       appendEventLog(config.eventLog, event);
+      if (event.type === "turn_end") finalAnswer = extractAssistantText(event.message) || finalAnswer;
+      if (event.type === "agent_end") finalAnswer = extractAssistantText(event.messages) || finalAnswer;
       handleSdkEvent(db, queueDb, config.agent.agent_id, event, process.pid);
     });
 
@@ -475,33 +488,107 @@ async function superviseSdk(configPath) {
       eventType: "sdk_started",
       payloadJson: JSON.stringify({ pid: process.pid, sessionId: session.sessionId ?? null, sessionFile: session.sessionFile ?? null, status }),
     });
-    writeResult(config.resultFile, { ok: true, agent: toStartResult(updatedAgent) });
-
-    commandPollTimer = setInterval(async () => {
-      if (commandPollRunning) return;
-      commandPollRunning = true;
-      try {
-        await deliverQueuedCommands(db, queueDb, config, session);
-      } catch (error) {
+    const startCommandPolling = () => {
+      if (commandPollTimer) return;
+      commandPollTimer = setInterval(async () => {
+        if (commandPollRunning) return;
+        commandPollRunning = true;
+        try {
+          await deliverQueuedCommands(db, queueDb, config, session);
+        } catch (error) {
+          appendEventSafe(db, config.agent.agent_id, "command_poll_error", serializeError(error));
+        } finally {
+          commandPollRunning = false;
+        }
+      }, Number(process.env.PI_PARALLEL_AGENTS_COMMAND_POLL_MS || 250));
+      void deliverQueuedCommands(db, queueDb, config, session).catch((error) => {
         appendEventSafe(db, config.agent.agent_id, "command_poll_error", serializeError(error));
-      } finally {
-        commandPollRunning = false;
-      }
-    }, Number(process.env.PI_PARALLEL_AGENTS_COMMAND_POLL_MS || 250));
-    void deliverQueuedCommands(db, queueDb, config, session).catch((error) => {
-      appendEventSafe(db, config.agent.agent_id, "command_poll_error", serializeError(error));
-    });
+      });
+    };
+
+    if (shouldWaitForInitialResponse(config)) {
+      startCommandPolling();
+      const wait = await waitForInitialResponse({ config, queueDb, promptPromise });
+      if (wait.status === "completed") finalAnswer = finalAnswer || extractAssistantText(session.messages) || "";
+      if (wait.status === "question") setAgentStatus(db, { agentId: config.agent.agent_id, status: "waiting", pid: process.pid, lastError: null });
+      const latestAgent = getAgent(db, config.agent.agent_id) ?? updatedAgent;
+      appendEvent(db, {
+        agentId: config.agent.agent_id,
+        eventType: "wait_initial_response_done",
+        payloadJson: JSON.stringify({ status: wait.status, answerBytes: Buffer.byteLength(finalAnswer, "utf8") }),
+      });
+      writeResult(config.resultFile, { ok: true, agent: toStartResult(latestAgent), answer: wait.status === "completed" ? finalAnswer : "", wait });
+      resultWritten = true;
+    } else {
+      writeResult(config.resultFile, { ok: true, agent: toStartResult(updatedAgent) });
+      resultWritten = true;
+      startCommandPolling();
+    }
   } catch (error) {
     if (!started) failStart(error);
     else {
-      setAgentStatus(db, { agentId: config.agent.agent_id, status: "crashed", pid: null, lastError: error.message });
-      appendEvent(db, { agentId: config.agent.agent_id, eventType: "worker_error", payloadJson: JSON.stringify(serializeError(error)) });
+      const serialized = serializeError(error);
+      setAgentStatus(db, { agentId: config.agent.agent_id, status: "crashed", pid: null, lastError: serialized.message });
+      appendEvent(db, { agentId: config.agent.agent_id, eventType: "worker_error", payloadJson: JSON.stringify(serialized) });
+      if (!resultWritten) writeResult(config.resultFile, { ok: false, error: serialized });
       try {
         queueDb.close();
       } catch {}
       db.close();
     }
   }
+}
+
+function shouldWaitForInitialResponse(config) {
+  return !config.singleResponse && config.waitUntil === "initial_response";
+}
+
+async function waitForInitialResponse({ config, queueDb, promptPromise }) {
+  if (!promptPromise) return { until: "initial_response", status: "completed" };
+
+  let promptOutcome = null;
+  promptPromise.then(
+    () => {
+      promptOutcome = { status: "completed" };
+    },
+    (error) => {
+      promptOutcome = { status: "failed", error };
+    },
+  );
+
+  const timeoutMs = positiveNumber(config.waitTimeoutMs);
+  const startedAt = Date.now();
+  const pollMs = Number(process.env.PI_PARALLEL_AGENTS_WAIT_POLL_MS || 100);
+
+  while (!promptOutcome) {
+    const question = findQueuedIncomingQuestion(queueDb, config.agent.agent_id);
+    if (question) {
+      return { until: "initial_response", status: "question", question: toPublicQuestion(question) };
+    }
+    if (timeoutMs && Date.now() - startedAt >= timeoutMs) {
+      return { until: "initial_response", status: "timeout", timeoutMs };
+    }
+    await sleep(pollMs);
+  }
+
+  if (promptOutcome.status === "failed") throw promptOutcome.error;
+  return { until: "initial_response", status: "completed" };
+}
+
+function findQueuedIncomingQuestion(queueDb, agentId) {
+  if (!queueDb) return null;
+  return listQuestions(queueDb, { agentId, direction: "incoming", status: "queued", limit: 1 })[0] ?? null;
+}
+
+function toPublicQuestion(question) {
+  return {
+    questionId: question.question_id,
+    agentId: question.agent_id,
+    direction: question.direction,
+    mode: question.mode,
+    status: question.status,
+    message: question.message,
+  };
 }
 
 async function runSingleResponse(config, db, queueDb) {
@@ -1253,6 +1340,19 @@ function nonNegativeInteger(value, name) {
 function positiveNumber(value) {
   const number = Number(value ?? 0);
   return Number.isFinite(number) && number > 0 ? number : undefined;
+}
+
+function normalizeWaitUntil(value, singleResponse = false) {
+  const waitUntil = optionalString(value) ?? (singleResponse ? "initial_response" : "started");
+  if (waitUntil !== "started" && waitUntil !== "initial_response") throw new Error(`waitUntil must be 'started' or 'initial_response'; got ${value}`);
+  if (singleResponse && waitUntil === "started") throw new Error("singleResponse=true always waits for the response; omit waitUntil or use waitUntil='initial_response'.");
+  return waitUntil;
+}
+
+function startResultTimeoutMs(config) {
+  if (!shouldWaitForInitialResponse(config)) return config.startTimeoutMs;
+  const waitTimeoutMs = positiveNumber(config.waitTimeoutMs);
+  return waitTimeoutMs ? waitTimeoutMs + Number(config.startTimeoutMs ?? 0) : undefined;
 }
 
 function sanitizeSlug(input, fallback) {

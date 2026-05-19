@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { getParallelAgents } from "../tools/get-parallel-agents.js";
+import { getParallelAgentDetails } from "../tools/get-parallel-agent-details.js";
 import { resolveRepoRoot } from "../util/paths.js";
 import { renderAgentDetails } from "../tui/render-agents.js";
 
@@ -10,7 +10,7 @@ export async function agentsOpenCommand(args: string, ctx: ExtensionCommandConte
     return;
   }
   const repoRoot = resolveRepoRoot(ctx.cwd);
-  const { agents } = getParallelAgents({ agentId, include: ["logs", "commands", "queues"] }, ctx);
+  const { agents } = getParallelAgentDetails({ agentId, include: ["logs", "commands", "queues"] }, ctx);
   const agent = agents[0];
   if (!agent) {
     ctx.ui.notify(`Unknown parallel agent: ${agentId}`, "warning");

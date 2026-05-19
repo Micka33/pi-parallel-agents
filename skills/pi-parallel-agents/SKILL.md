@@ -1,132 +1,77 @@
 ---
 name: pi-parallel-agents
-description: Use when you should launch, inspect, control, message, or coordinate Pi sub-agents with start_agent, get_parallel_agents, control_parallel_agent, message_parallel_agent, or reply_parallel_question.
+description: Use when deciding whether to delegate work to Pi sub-agents, especially read-only current-worktree scouts, investigating, context-inheriting children, or when launching, inspecting, messaging, resuming, stopping, cleaning, or coordinating sub-agents with start_agent, get_parallel_agents, control_parallel_agent, message_parallel_agent, or reply_parallel_question.
 ---
 
 # pi-parallel-agents
 
-Use `pi-parallel-agents` to create child Pi agents and monitor their state.
+Use sub-agents when delegation prevents context loading or adds useful independence or parallelism.
 
-## Creation primitive: `start_agent`
+## When to use
 
-`start_agent` is the only creation primitive. It creates one SDK-backed child session and accepts explicit options for worktree isolation, read-only policy, one-shot behavior, nested-agent quota, model, thinking, and tool access.
+Delegate when:
 
-Defaults:
+- Investigating
+- The user asks for parallel work, a second opinion, review, scouting, or independent validation.
+- A small targeted update needs quick code discovery before the parent edits.
+- Investigation and implementation can be separated.
+- Multiple areas can be inspected independently.
+- for “inspect and verify behavior/docs” question, prefer a read-only one-shot sub-agent unless the answer is truly trivial.
 
-- `dedicatedWorktree`: `true`.
-- `inheritContext`: `false`; when `true`, the child forks the requester session at the pre-launch leaf so the launch request itself is excluded.
-- `readOnly`: `false` for dedicated worktrees, `true` for shared/current checkout.
-- `singleResponse`: `false`.
-- `maxSubAgents`: `0`; children cannot start their own children unless explicitly granted.
-- `provider`, `model`, `thinkingLevel`: inherit from the requesting session unless overridden.
-- `allowedTools`: inherit active tools by default; read-only mode is enforced by the actual SDK tool list.
-
-Examples:
+For small targeted updates, prefer a read-only current-worktree scout and let the parent apply edits:
 
 ```json
 {
-  "prompt": "Inspect the API layer and report risks. Do not modify files.",
+  "prompt": "Find the minimal safe change for the requested update. Report exact files and edits; do not modify files.",
   "dedicatedWorktree": false,
-  "readOnly": true
-}
-```
-
-One-shot question:
-
-```json
-{
-  "prompt": "Independently assess whether this result is safe to merge.",
-  "dedicatedWorktree": true,
   "readOnly": true,
   "singleResponse": true
 }
 ```
 
-Sub-agent quota:
+Use `inheritContext=false` when the prompt is self-contained. Use `inheritContext=true` only when the child needs prior conversation, earlier tool output, or unstated user preferences:
 
 ```json
 {
-  "prompt": "Coordinate two read-only scouts, then summarize.",
-  "maxSubAgents": 2
+  "prompt": "Using the existing discussion context, identify the minimal files to update. Do not modify files.",
+  "dedicatedWorktree": false,
+  "readOnly": true,
+  "singleResponse": true,
+  "inheritContext": true
 }
 ```
 
-Safety rules:
+## Starting agents
 
-- Do not request `dedicatedWorktree=false` with write access.
-- Do not allow `bash`, `edit`, or `write` when `readOnly=true`.
-- Increase `maxSubAgents` only when the user explicitly wants nested delegation.
+Use `start_agent` as the only creation primitive.
 
-## Inspecting agents: `get_parallel_agents`
+Key options:
 
-Common calls:
+- `dedicatedWorktree=false, readOnly=true`: shared/current checkout, investigation only.
+- `dedicatedWorktree=true`: isolated worktree; required for child writes.
+- `singleResponse=true`: one-shot answer, then cleanup/dispose.
+- `waitUntil="initial_response"`: for `singleResponse=false`, block the parent until the child's first; pair with `waitTimeoutMs` when a bounded wait is needed.
+- `inheritContext=true`: fork requester context before the launch turn.
+- `maxSubAgents`: default `0`; increase only when nested delegation is explicitly wanted.
 
-```json
-{ "include": ["status", "summary"] }
-```
+Safety:
 
-```json
-{ "agentId": "api-review", "include": ["status", "logs", "commands", "queues"] }
-```
+- Never request shared checkout write access (`dedicatedWorktree=false, readOnly=false`).
+- Do not allow `bash`, `edit`, or `write` with `readOnly=true`.
+- Prefer one-shot read-only children for quick analysis.
 
-Fields to watch:
+## Inspecting and coordinating
 
-- `status`: `starting`, `running`, `waiting`, `stopped`, `crashed`, `done`, or `cleaned`.
-- `lastError`: most useful when `status` is `crashed`.
-- `dedicatedWorktree` and `readOnly`: confirm isolation and actual SDK tool policy.
-- `provider`, `model`, `thinking`: confirm inherited/overridden settings.
-- `sessionId`/`sessionFile`: confirms the SDK child session.
-- `commands`: queued SDK worker control messages.
-- `queue`: incoming questions and outgoing durable messages.
+- `get_parallel_agents`: compact list of existing agents (`agentId`, `displayName`, `sessionId`, `status`).
+- `control_parallel_agent`: `stop`, `resume`, `refresh`, `mark_done`, `clean`, `retry_question`, `review_results`, `set_defaults`.
+- `message_parallel_agent`: parent → child communication.
+  - `mode="queue"`: durable follow-up prompt; automatically resumes `done` or `stopped` agents when needed.
+  - `mode="steer"`: immediate steering for a live agent.
+- `reply_parallel_question`: answer child → parent questions.
 
-## Control and messaging
+Cleaning rules:
 
-Use `control_parallel_agent` for lifecycle actions:
+- `clean` refuses live active agents (`starting`, `running`, `waiting`); stop them first. It may stop leftover worker PIDs for non-active agents.
+- Do not remove worktrees, branches, sessions, or history unless the user explicitly asks.
 
-```json
-{ "action": "stop", "agentId": "api-review" }
-```
-
-```json
-{ "action": "resume", "agentId": "api-review" }
-```
-
-```json
-{ "action": "clean", "agentId": "api-review", "removeWorktree": true, "force": false }
-```
-
-Safety rules:
-
-- Stop an agent before cleaning it.
-- Do not remove worktrees, branches, sessions, or history unless the user explicitly asked.
-- Use `refresh` when status looks stale.
-
-Use `message_parallel_agent` for parent → child communication:
-
-```json
-{ "agentId": "api-review", "mode": "steer", "message": "Focus on failing tests only." }
-```
-
-```json
-{ "agentId": "api-review", "mode": "queue", "message": "After your current turn, run npm test and summarize failures." }
-```
-
-- `steer` queues immediate SDK steering.
-- `queue` persists a durable follow-up delivered by the SDK worker when alive/resumed.
-- For isolated one-shot questions, use `start_agent` with `singleResponse=true`.
-
-Use `reply_parallel_question` for child → parent questions:
-
-```json
-{ "agentId": "api-review", "questionId": "question-id", "response": "Use option B and keep public API stable." }
-```
-
-## Recommended workflow
-
-1. Decide whether delegation is useful.
-2. Use `start_agent` for every child you create.
-3. Prefer `dedicatedWorktree=false, readOnly=true` for quick analysis in the current checkout.
-4. Use dedicated worktrees for write-capable implementation.
-5. Use `singleResponse=true` for one-shot questions.
-6. Immediately inspect with `get_parallel_agents` for persistent children.
-7. Use `control_parallel_agent action=review_results` before final reporting when several children produced summaries or blockers.
+Before summarizing multiple child outputs, use `control_parallel_agent` with `action="review_results"`.

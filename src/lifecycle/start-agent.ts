@@ -30,6 +30,24 @@ export interface StartParallelAgentResult {
   status: string;
 }
 
+export interface StartParallelAgentWaitResult {
+  agent: StartParallelAgentResult;
+  answer: string;
+  wait: {
+    until: "initial_response";
+    status: "completed" | "timeout" | "question";
+    timeoutMs?: number;
+    question?: {
+      questionId: string;
+      agentId: string;
+      direction: string;
+      mode: string;
+      status: string;
+      message: string;
+    };
+  };
+}
+
 export interface StartAgentInput {
   repoRoot: string;
   parentPrompt: string;
@@ -38,7 +56,7 @@ export interface StartAgentInput {
   activeTools?: string[];
 }
 
-export async function startParallelAgent(input: StartAgentInput): Promise<StartParallelAgentResult> {
+export async function startParallelAgent(input: StartAgentInput): Promise<StartParallelAgentResult | StartParallelAgentWaitResult> {
   const runtime = runtimeDir(input.repoRoot);
   const tmpDir = join(runtime, "tmp");
   mkdirSync(tmpDir, { recursive: true });
@@ -75,6 +93,8 @@ export async function startParallelAgent(input: StartAgentInput): Promise<StartP
         dedicatedWorktree: input.options.dedicatedWorktree,
         readOnly: input.options.readOnly,
         singleResponse: input.options.singleResponse,
+        waitUntil: input.options.waitUntil,
+        waitTimeoutMs: input.options.waitTimeoutMs,
         inheritContext: input.options.inheritContext,
         inheritedSessionFile: inheritedSession?.sessionFile ?? null,
         inheritedSessionLeafId: inheritedSession?.leafId ?? null,
@@ -105,8 +125,8 @@ export async function startParallelAgent(input: StartAgentInput): Promise<StartP
   ];
   if (input.options.provider) args.push("--provider", input.options.provider);
 
-  const timeoutMs = resolveStartScriptTimeout(input.options.singleResponse);
-  const result = await runJsonScript<StartParallelAgentResult>(
+  const timeoutMs = resolveStartScriptTimeout(input.options);
+  const result = await runJsonScript<StartParallelAgentResult | StartParallelAgentWaitResult>(
     scriptPath("start-parallel-agent.sh"),
     args,
     timeoutMs === undefined ? { cwd: input.repoRoot } : { cwd: input.repoRoot, timeoutMs },
@@ -165,10 +185,14 @@ function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
   return -1;
 }
 
-function resolveStartScriptTimeout(singleResponse: boolean): number | undefined {
-  if (singleResponse) {
+function resolveStartScriptTimeout(options: ResolvedAgentOptions): number | undefined {
+  if (options.singleResponse) {
     const value = Number(process.env.PI_PARALLEL_AGENTS_EXTENSION_SINGLE_RESPONSE_TIMEOUT_MS ?? 0);
     return value > 0 ? value : undefined;
+  }
+  if (options.waitUntil === "initial_response") {
+    const startupTimeoutMs = Number(process.env.PI_PARALLEL_AGENTS_EXTENSION_START_TIMEOUT_MS ?? 45_000);
+    return options.waitTimeoutMs ? options.waitTimeoutMs + startupTimeoutMs : undefined;
   }
   return Number(process.env.PI_PARALLEL_AGENTS_EXTENSION_START_TIMEOUT_MS ?? 45_000);
 }

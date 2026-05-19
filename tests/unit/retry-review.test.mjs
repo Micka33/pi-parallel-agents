@@ -119,6 +119,23 @@ function runNodeResult(code, env = {}) {
   });
 }
 
+async function waitFor(fn, timeoutMs = 5000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const value = fn();
+    if (value) return value;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+  }
+  assert.fail("timed out waiting for condition");
+}
+
+function killPid(pid) {
+  if (!pid) return;
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {}
+}
+
 function distUrl(path) {
   return pathToFileURL(join(root, "dist", "src", ...path)).href;
 }
@@ -160,6 +177,115 @@ test("retryBlockedQuestion requeues blocked outgoing messages and enqueues deliv
   `);
   assert.notEqual(retryAgain.status, 0);
   assert.match(retryAgain.stderr, /Only blocked questions/);
+});
+
+test("controlParallelAgent includes the agent queue in control outputs", skipUnderCoverage, () => {
+  const { parent, repo } = createRepo();
+  insertAgent({ repo, parent, agentId: "control-agent" });
+  queueQuestion(repo, { questionId: "control-q", agentId: "control-agent", direction: "incoming", mode: "reply", status: "queued", message: "need answer" });
+
+  const output = JSON.parse(
+    runNode(`
+      import { controlParallelAgent } from ${JSON.stringify(distUrl(["tools", "control-parallel-agent.js"]))};
+      const ctx = {
+        cwd: ${JSON.stringify(repo)},
+        ui: {
+          notify() {},
+          setWidget() {},
+        },
+      };
+      const result = await controlParallelAgent({ action: "mark_done", agentId: "control-agent", summary: "done" }, ctx);
+      console.log(JSON.stringify(result));
+    `),
+  );
+
+  assert.ok(Array.isArray(output.queue));
+  assert.deepEqual(output.queue.map((question) => question.question_id), ["control-q"]);
+  assert.equal(output.queue[0].agent_id, "control-agent");
+  assert.equal(output.queue[0].message, "need answer");
+});
+
+test("messageParallelAgent returns compact public output and still enqueues delivery", skipUnderCoverage, () => {
+  const { parent, repo } = createRepo();
+  insertAgent({ repo, parent, agentId: "msg-agent" });
+
+  const output = JSON.parse(
+    runNode(`
+      import { messageParallelAgent } from ${JSON.stringify(distUrl(["tools", "message-parallel-agent.js"]))};
+      const ctx = {
+        cwd: ${JSON.stringify(repo)},
+        ui: {
+          notify() {},
+          setWidget() {},
+        },
+      };
+      const result = await messageParallelAgent({ agentId: "msg-agent", mode: "queue", message: "hello child", questionId: "msg-test" }, ctx);
+      console.log(JSON.stringify(result));
+    `),
+  );
+
+  assert.deepEqual(output, {
+    ok: true,
+    action: "message",
+    mode: "queue",
+    question: { question_id: "msg-test", agent_id: "msg-agent", direction: "outgoing", message: "hello child" },
+  });
+  assert.deepEqual(Object.keys(output).sort(), ["action", "mode", "ok", "question"].sort());
+  assert.deepEqual(Object.keys(output.question).sort(), ["agent_id", "direction", "message", "question_id"].sort());
+
+  const question = readRow(tasksDb(repo), "SELECT direction, message, status FROM parallel_questions WHERE question_id = ?", "msg-test");
+  assert.equal(question.direction, "outgoing");
+  assert.equal(question.message, "hello child");
+  assert.equal(question.status, "queued");
+  const command = readRow(stateDb(repo), "SELECT command_type, status FROM agent_commands WHERE agent_id = ?", "msg-agent");
+  assert.equal(command.command_type, "follow_up");
+  assert.equal(command.status, "queued");
+});
+
+test("messageParallelAgent auto-resumes done and stopped agents for queued prompts", skipUnderCoverage, async () => {
+  const { parent, repo } = createRepo();
+
+  for (const status of ["done", "stopped"]) {
+    const agentId = `${status}-msg-agent`;
+    const questionId = `${status}-msg-test`;
+    insertAgent({ repo, parent, agentId, status });
+
+    const output = JSON.parse(
+      runNode(
+        `
+        import { messageParallelAgent } from ${JSON.stringify(distUrl(["tools", "message-parallel-agent.js"]))};
+        const ctx = {
+          cwd: ${JSON.stringify(repo)},
+          ui: {
+            notify() {},
+            setWidget() {},
+          },
+        };
+        const result = await messageParallelAgent({ agentId: ${JSON.stringify(agentId)}, mode: "queue", message: "continue", questionId: ${JSON.stringify(questionId)} }, ctx);
+        console.log(JSON.stringify(result));
+      `,
+        { PI_PARALLEL_AGENTS_START_TIMEOUT_MS: "8000", PI_PARALLEL_AGENTS_COMMAND_POLL_MS: "50" },
+      ),
+    );
+
+    try {
+      assert.equal(output.ok, true);
+      assert.equal(output.resumed.agentId, agentId);
+      assert.equal(output.resumed.status, "waiting");
+      assert.equal(typeof output.resumed.pid, "number");
+
+      const command = await waitFor(() => {
+        const row = readRow(stateDb(repo), "SELECT * FROM agent_commands WHERE agent_id = ?", agentId);
+        return row?.status === "succeeded" ? row : undefined;
+      });
+      assert.equal(command.command_type, "follow_up");
+
+      const question = readRow(tasksDb(repo), "SELECT status FROM parallel_questions WHERE question_id = ?", questionId);
+      assert.equal(question.status, "delivered");
+    } finally {
+      killPid(output.resumed?.pid);
+    }
+  }
 });
 
 test("review and overlay surface blocked questions, guardrails, and recommendations", skipUnderCoverage, () => {

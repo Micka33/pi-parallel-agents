@@ -113,6 +113,9 @@ function readRow(dbPath, sql, ...args) {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
     return db.prepare(sql).get(...args);
+  } catch (error) {
+    if (/no such table/.test(String(error.message))) return undefined;
+    throw error;
   } finally {
     db.close();
   }
@@ -222,6 +225,81 @@ test("start-parallel-agent.sh supports shared checkout read-only mode without cr
     assert.equal(existsSync(join(parent, "pi", "agent-triage")), false);
   } finally {
     killPid(result.pid);
+  }
+});
+
+test("start-parallel-agent.sh can wait for a persistent child's initial response", () => {
+  const { parent, repo } = createRepo();
+  const { contextPath, promptPath } = writeLaunchFiles(repo, {
+    name: "wait-answer",
+    agentPrompt: "Answer then stay available",
+    waitUntil: "initial_response",
+  });
+  const result = runStart(repo, ["--context", contextPath, "--prompt", promptPath, "--model", "fake-model", "--thinking", "high"]);
+
+  try {
+    assert.equal(result.wait.status, "completed");
+    assert.equal(result.wait.until, "initial_response");
+    assert.equal(result.answer, "fake done");
+    assert.equal(result.agent.agentId, "wait-answer");
+    assert.equal(result.agent.singleResponse, false);
+    assert.equal(result.agent.status, "waiting");
+    assert.equal(result.agent.worktreePath, join(parent, "pi", "agent-wait-answer"));
+    assert.equal(existsSync(result.agent.worktreePath), true);
+    assert.equal(existsSync(result.agent.sessionFile), true);
+    assert.equal(readAgent(repo, result.agent.agentId).status, "waiting");
+  } finally {
+    killPid(result.agent?.pid);
+  }
+});
+
+test("waitUntil initial_response returns timeout while keeping the child alive", () => {
+  const { parent, repo } = createRepo();
+  const { contextPath, promptPath } = writeLaunchFiles(repo, {
+    name: "wait-timeout",
+    agentPrompt: "SLOW_RESPONSE",
+    waitUntil: "initial_response",
+    waitTimeoutMs: 100,
+  });
+  const result = runStart(repo, ["--context", contextPath, "--prompt", promptPath, "--model", "fake-model", "--thinking", "high"]);
+
+  try {
+    assert.equal(result.wait.status, "timeout");
+    assert.equal(result.wait.timeoutMs, 100);
+    assert.equal(result.answer, "");
+    assert.equal(result.agent.agentId, "wait-timeout");
+    assert.equal(result.agent.status, "running");
+    assert.equal(existsSync(join(parent, "pi", "agent-wait-timeout")), true);
+    assert.equal(readAgent(repo, result.agent.agentId).status, "running");
+  } finally {
+    killPid(result.agent?.pid);
+  }
+});
+
+test("waitUntil initial_response returns early when the child asks a durable question", () => {
+  const { parent, repo } = createRepo();
+  const { contextPath, promptPath } = writeLaunchFiles(repo, {
+    name: "wait-question",
+    agentPrompt: "ASK_UI_BLOCKING",
+    waitUntil: "initial_response",
+    waitTimeoutMs: 5000,
+  });
+  const result = runStart(repo, ["--context", contextPath, "--prompt", promptPath, "--model", "fake-model", "--thinking", "high"], {
+    PI_PARALLEL_AGENTS_WAIT_POLL_MS: "25",
+  });
+
+  try {
+    assert.equal(result.wait.status, "question");
+    assert.equal(result.wait.question.questionId, "ui-test");
+    assert.equal(result.wait.question.agentId, "wait-question");
+    assert.equal(result.agent.status, "waiting");
+    assert.equal(result.answer, "");
+    assert.equal(existsSync(join(parent, "pi", "agent-wait-question")), true);
+    const incoming = readRow(tasksDb(repo), "SELECT * FROM parallel_questions WHERE question_id = ?", "ui-test");
+    assert.equal(incoming.status, "queued");
+    assert.equal(incoming.agent_id, "wait-question");
+  } finally {
+    killPid(result.agent?.pid);
   }
 });
 

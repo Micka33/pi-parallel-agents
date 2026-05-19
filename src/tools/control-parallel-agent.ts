@@ -4,6 +4,7 @@ import { refreshParallelAgents } from "../lifecycle/refresh-agents.js";
 import { resumeParallelAgent } from "../lifecycle/resume-agent.js";
 import { runJsonScript } from "../lifecycle/script-runner.js";
 import { retryBlockedQuestion } from "../queues/retry-question.js";
+import { queueAdapterForRepo } from "../queues/question-router.js";
 import { buildResultsReview } from "../review/results-review.js";
 import { stopParallelAgent } from "../lifecycle/stop-agent.js";
 import { updateParallelAgentsWidget } from "../tui/widget.js";
@@ -17,13 +18,13 @@ export async function controlParallelAgent(params: ControlParallelAgentInput, ct
       const agentId = requireAgentId(params);
       const result = await stopParallelAgent(repoRoot, agentId);
       updateParallelAgentsWidget(ctx, repoRoot);
-      return result;
+      return withQueue(result, repoRoot, agentId);
     }
     case "resume": {
       const agentId = requireAgentId(params);
       const result = await resumeParallelAgent(repoRoot, agentId);
       updateParallelAgentsWidget(ctx, repoRoot);
-      return result;
+      return withQueue(result, repoRoot, agentId);
     }
     case "set_defaults": {
       if (params.model === undefined && params.thinking === undefined) throw new Error("set_defaults requires model or thinking");
@@ -32,22 +33,23 @@ export async function controlParallelAgent(params: ControlParallelAgentInput, ct
       if (params.thinking !== undefined) args.push("--thinking", params.thinking);
       const result = await runJsonScript(scriptPath("parallel-agent-state.sh"), args, { cwd: repoRoot, timeoutMs: 10_000 });
       updateParallelAgentsWidget(ctx, repoRoot);
-      return result.json;
+      return withQueue(result.json, repoRoot);
     }
     case "refresh": {
       const agents = await refreshParallelAgents(repoRoot);
       updateParallelAgentsWidget(ctx, repoRoot);
-      return { ok: true, action: "refresh", agents, count: agents.length };
+      return withQueue({ ok: true, action: "refresh", agents, count: agents.length }, repoRoot);
     }
     case "mark_done": {
       const agentId = requireAgentId(params);
+      await stopParallelAgent(repoRoot, agentId);
       const args = ["mark-done", "--state-db", stateDbPath(repoRoot), "--agent-id", agentId];
       if (params.summary !== undefined) args.push("--summary", params.summary);
       if (params.diffSummary !== undefined) args.push("--diff-summary", params.diffSummary);
       if (params.testsJson !== undefined) args.push("--tests-json", params.testsJson);
       const result = await runJsonScript(scriptPath("parallel-agent-state.sh"), args, { cwd: repoRoot, timeoutMs: 10_000 });
       updateParallelAgentsWidget(ctx, repoRoot);
-      return result.json;
+      return withQueue(result.json, repoRoot, agentId);
     }
     case "clean": {
       const agentId = requireAgentId(params);
@@ -59,19 +61,19 @@ export async function controlParallelAgent(params: ControlParallelAgentInput, ct
       if (params.force !== undefined) cleanOptions.force = params.force;
       const result = await cleanParallelAgent(repoRoot, agentId, cleanOptions);
       updateParallelAgentsWidget(ctx, repoRoot);
-      return result;
+      return withQueue(result, repoRoot, agentId);
     }
     case "retry_question": {
       const agentId = requireAgentId(params);
       if (!params.questionId) throw new Error("retry_question requires questionId");
       const result = await retryBlockedQuestion(repoRoot, agentId, params.questionId);
       updateParallelAgentsWidget(ctx, repoRoot);
-      return result;
+      return withQueue(result, repoRoot, agentId);
     }
     case "review_results": {
       const result = buildResultsReview(repoRoot, params.agentId);
       updateParallelAgentsWidget(ctx, repoRoot);
-      return result;
+      return withQueue(result, repoRoot, params.agentId);
     }
     default:
       throw new Error(`Unsupported control action: ${(params as { action: string }).action}`);
@@ -81,4 +83,10 @@ export async function controlParallelAgent(params: ControlParallelAgentInput, ct
 function requireAgentId(params: ControlParallelAgentInput): string {
   if (!params.agentId) throw new Error(`${params.action} requires agentId`);
   return params.agentId;
+}
+
+function withQueue(result: unknown, repoRoot: string, agentId?: string): unknown {
+  const queue = queueAdapterForRepo(repoRoot).listQuestions(agentId ? { agentId } : {});
+  if (result !== null && typeof result === "object" && !Array.isArray(result)) return { ...result, queue };
+  return { result, queue };
 }
